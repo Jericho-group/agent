@@ -252,6 +252,13 @@ async def upload_knowledge(file: UploadFile = File(...)):
     return {"uploaded": len(data), "total": store.count()}
 
 
+@app.get("/admin/api/knowledge/list", dependencies=[Depends(_check_admin)])
+async def list_knowledge(category: str | None = None, search: str | None = None):
+    """Список документов базы знаний для отображения в админке."""
+    store = VectorStore()
+    return store.list_docs(category=category, search=search)
+
+
 @app.delete("/admin/api/knowledge", dependencies=[Depends(_check_admin)])
 async def clear_knowledge():
     """Очистить всю базу знаний."""

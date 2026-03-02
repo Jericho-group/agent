@@ -150,3 +150,39 @@ class VectorStore:
             cur.execute("SELECT COUNT(*) FROM knowledge_base")
             result = cur.fetchone()
         return result[0] if result else 0
+
+    def list_docs(
+        self,
+        category: str | None = None,
+        search: str | None = None,
+        limit: int = 200,
+    ) -> list[dict]:
+        """Возвращает документы без embedding для отображения в админке."""
+        conn = _get_conn()
+        conditions: list[str] = []
+        params: list = []
+
+        if category:
+            conditions.append("category = %s")
+            params.append(category)
+        if search:
+            conditions.append("(title ILIKE %s OR content ILIKE %s)")
+            params.extend([f"%{search}%", f"%{search}%"])
+
+        where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        params.append(limit)
+
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"""
+                SELECT id, title, category, content,
+                       to_char(updated_at, 'YYYY-MM-DD HH24:MI') AS updated_at
+                FROM knowledge_base
+                {where_clause}
+                ORDER BY category, title
+                LIMIT %s
+                """,
+                params,
+            )
+            rows = cur.fetchall()
+        return [dict(r) for r in rows]
