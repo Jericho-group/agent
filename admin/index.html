@@ -8,545 +8,932 @@
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
   <style>
     [x-cloak] { display: none !important; }
-    .flow-line { width: 2px; height: 28px; background: #cbd5e1; margin: 0 auto; }
-    .flow-line-h { height: 2px; background: #cbd5e1; }
-    .flow-box {
-      border: 2px solid; border-radius: 10px; padding: 8px 18px;
-      text-align: center; font-size: 13px; font-weight: 600;
-      background: white; white-space: nowrap;
-    }
-    .arrow-down::after {
-      content: '▼'; display: block; text-align: center;
-      color: #94a3b8; font-size: 11px; margin-top: -4px;
-    }
     pre { white-space: pre-wrap; word-break: break-all; }
+
+    /* ── Flow nodes ─────────────────────────────────────────── */
+    .fn {
+      border-radius: 14px; border: 2px solid;
+      padding: 10px 16px; font-size: 12px; font-weight: 600;
+      background: white; user-select: none;
+      transition: box-shadow .35s ease, transform .35s ease, border-color .35s ease;
+      position: relative; cursor: default;
+    }
+    .fn.fn-active { transform: scale(1.06); z-index: 5; }
+    .fn.fn-done   { }
+
+    /* glow per color */
+    .fn-indigo.fn-active  { box-shadow: 0 0 0 3px #a5b4fc, 0 6px 24px #6366f140; border-color:#6366f1; }
+    .fn-indigo.fn-done    { box-shadow: 0 0 0 2.5px #34d399; border-color:#34d399 !important; }
+    .fn-rose.fn-active    { box-shadow: 0 0 0 3px #fda4af, 0 6px 24px #f43f5e30; border-color:#f43f5e; }
+    .fn-rose.fn-done      { box-shadow: 0 0 0 2.5px #34d399; border-color:#34d399 !important; }
+    .fn-amber.fn-active   { box-shadow: 0 0 0 3px #fcd34d, 0 6px 24px #f59e0b30; border-color:#f59e0b; }
+    .fn-amber.fn-done     { box-shadow: 0 0 0 2.5px #34d399; border-color:#34d399 !important; }
+    .fn-emerald.fn-active { box-shadow: 0 0 0 3px #6ee7b7, 0 6px 24px #10b98130; border-color:#10b981; }
+    .fn-emerald.fn-done   { box-shadow: 0 0 0 2.5px #34d399; border-color:#34d399 !important; }
+    .fn-sky.fn-active     { box-shadow: 0 0 0 3px #7dd3fc, 0 6px 24px #0ea5e930; border-color:#0ea5e9; }
+    .fn-sky.fn-done       { box-shadow: 0 0 0 2.5px #34d399; border-color:#34d399 !important; }
+    .fn-violet.fn-active  { box-shadow: 0 0 0 3px #c4b5fd, 0 6px 24px #8b5cf630; border-color:#8b5cf6; }
+    .fn-violet.fn-done    { box-shadow: 0 0 0 2.5px #34d399; border-color:#34d399 !important; }
+    .fn-pink.fn-active    { box-shadow: 0 0 0 3px #f9a8d4, 0 6px 24px #ec489930; border-color:#ec4899; }
+    .fn-pink.fn-done      { box-shadow: 0 0 0 2.5px #34d399; border-color:#34d399 !important; }
+    .fn-slate.fn-active   { box-shadow: 0 0 0 3px #94a3b8, 0 6px 24px #64748b30; border-color:#64748b; }
+    .fn-slate.fn-done     { box-shadow: 0 0 0 2.5px #34d399; border-color:#34d399 !important; }
+
+    /* ping dot on active nodes */
+    .fn.fn-active::after {
+      content: ''; position: absolute; top: -7px; right: -7px;
+      width: 11px; height: 11px; border-radius: 50%; background: #6366f1;
+      animation: ping-dot 1s cubic-bezier(0,0,.2,1) infinite;
+    }
+    .fn-rose.fn-active::after   { background:#f43f5e; }
+    .fn-amber.fn-active::after  { background:#f59e0b; }
+    .fn-emerald.fn-active::after{ background:#10b981; }
+    .fn-sky.fn-active::after    { background:#0ea5e9; }
+    .fn-violet.fn-active::after { background:#8b5cf6; }
+    .fn-pink.fn-active::after   { background:#ec4899; }
+    .fn-slate.fn-active::after  { background:#64748b; }
+    @keyframes ping-dot {
+      0%   { transform:scale(1); opacity:1; }
+      75%, 100% { transform:scale(2.8); opacity:0; }
+    }
+
+    /* SVG path animations */
+    @keyframes flow-pulse {
+      to { stroke-dashoffset: -22; }
+    }
+    .svg-flow { animation: flow-pulse .55s linear infinite; }
+
+    /* Trace items */
+    .trace-item { animation: trace-slide .28s ease forwards; }
+    @keyframes trace-slide {
+      from { opacity:0; transform:translateX(-10px); }
+      to   { opacity:1; transform:translateX(0); }
+    }
+
+    /* Chat messages */
+    .chat-msg { animation: msg-pop .2s ease forwards; }
+    @keyframes msg-pop {
+      from { opacity:0; transform:translateY(7px); }
+      to   { opacity:1; transform:translateY(0); }
+    }
+
+    /* Typing dots */
+    .tdot {
+      display:inline-block; width:6px; height:6px;
+      border-radius:50%; background:#94a3b8;
+      animation: tdot 1.3s infinite;
+    }
+    .tdot:nth-child(2){ animation-delay:.18s; }
+    .tdot:nth-child(3){ animation-delay:.36s; }
+    @keyframes tdot {
+      0%,60%,100%{ transform:translateY(0);   opacity:.4; }
+      30%        { transform:translateY(-5px); opacity:1; }
+    }
   </style>
 </head>
 <body class="h-full bg-slate-50" x-data="adminApp()" x-cloak>
 
-  <!-- ═══ LOGIN SCREEN ══════════════════════════════════════════════════════ -->
-  <div x-show="!authenticated" class="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 to-indigo-950">
-    <div class="bg-white rounded-2xl shadow-2xl p-8 w-96">
-      <div class="text-center mb-8">
-        <div class="w-16 h-16 bg-indigo-600 rounded-2xl flex items-center justify-center text-white text-2xl font-bold mx-auto mb-4">AI</div>
-        <h1 class="text-2xl font-bold text-slate-800">Agent Admin</h1>
-        <p class="text-slate-400 text-sm mt-1">Введите пароль из .env → ADMIN_TOKEN</p>
+<!-- ═══ LOGIN ═══════════════════════════════════════════════════════════════ -->
+<div x-show="!authenticated" class="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 to-indigo-950">
+  <div class="bg-white rounded-2xl shadow-2xl p-8 w-96">
+    <div class="text-center mb-8">
+      <div class="w-16 h-16 bg-indigo-600 rounded-2xl flex items-center justify-center text-white text-2xl font-bold mx-auto mb-4">AI</div>
+      <h1 class="text-2xl font-bold text-slate-800">Agent Admin</h1>
+      <p class="text-slate-400 text-sm mt-1">ADMIN_TOKEN из .env</p>
+    </div>
+    <form @submit.prevent="login">
+      <input type="password" x-model="password"
+        class="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 mb-3"
+        placeholder="Admin token..." autofocus>
+      <button type="submit" class="w-full bg-indigo-600 text-white rounded-xl py-3 text-sm font-semibold hover:bg-indigo-700 active:scale-95 transition">Войти →</button>
+      <p x-show="loginError" class="text-red-500 text-sm text-center mt-3" x-text="loginError"></p>
+    </form>
+  </div>
+</div>
+
+<!-- ═══ MAIN PANEL ══════════════════════════════════════════════════════════ -->
+<div x-show="authenticated" class="flex h-screen overflow-hidden">
+
+  <!-- Sidebar -->
+  <div class="w-60 bg-slate-900 flex flex-col flex-shrink-0 shadow-xl">
+    <div class="p-5 border-b border-slate-700/50">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-bold text-sm">AI</div>
+        <div>
+          <div class="text-white font-semibold text-sm" x-text="stats.company||'Agent Admin'"></div>
+          <div class="flex items-center gap-1.5 mt-0.5">
+            <div :class="stats.status==='ok'?'bg-emerald-400':'bg-red-400'" class="w-1.5 h-1.5 rounded-full animate-pulse"></div>
+            <span class="text-slate-400 text-xs" x-text="stats.status==='ok'?'Онлайн':'Ошибка'"></span>
+          </div>
+        </div>
       </div>
-      <form @submit.prevent="login">
-        <input type="password" x-model="password"
-          class="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 mb-3"
-          placeholder="Admin token..." autofocus>
-        <button type="submit"
-          class="w-full bg-indigo-600 text-white rounded-xl py-3 text-sm font-semibold hover:bg-indigo-700 active:scale-95 transition">
-          Войти →
+    </div>
+    <nav class="flex-1 p-3 space-y-0.5">
+      <template x-for="item in navItems" :key="item.id">
+        <button @click="page=item.id"
+          :class="page===item.id?'bg-indigo-600 text-white':'text-slate-400 hover:bg-slate-800 hover:text-slate-200'"
+          class="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all">
+          <span class="text-base" x-text="item.icon"></span>
+          <span x-text="item.label"></span>
         </button>
-        <p x-show="loginError" class="text-red-500 text-sm text-center mt-3" x-text="loginError"></p>
-      </form>
+      </template>
+    </nav>
+    <div class="p-4 border-t border-slate-700/50 text-slate-500 text-xs space-y-1">
+      <div>KB: <span class="text-slate-300" x-text="(stats.knowledge_base_docs||0)+' docs'"></span></div>
+      <div>Sessions: <span class="text-slate-300" x-text="(stats.active_sessions||0)+' active'"></span></div>
     </div>
   </div>
 
-  <!-- ═══ MAIN PANEL ════════════════════════════════════════════════════════ -->
-  <div x-show="authenticated" class="flex h-screen overflow-hidden">
-
-    <!-- Sidebar -->
-    <div class="w-60 bg-slate-900 flex flex-col flex-shrink-0 shadow-xl">
-      <div class="p-5 border-b border-slate-700/50">
-        <div class="flex items-center gap-3">
-          <div class="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-bold text-sm">AI</div>
-          <div>
-            <div class="text-white font-semibold text-sm" x-text="stats.company || 'Agent Admin'"></div>
-            <div class="flex items-center gap-1.5 mt-0.5">
-              <div :class="stats.status === 'ok' ? 'bg-emerald-400' : 'bg-red-400'"
-                class="w-1.5 h-1.5 rounded-full animate-pulse"></div>
-              <span class="text-slate-400 text-xs" x-text="stats.status === 'ok' ? 'Онлайн' : 'Ошибка'"></span>
-            </div>
-          </div>
-        </div>
-      </div>
-      <nav class="flex-1 p-3 space-y-0.5">
-        <template x-for="item in navItems" :key="item.id">
-          <button @click="page = item.id"
-            :class="page === item.id
-              ? 'bg-indigo-600 text-white shadow-sm'
-              : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'"
-            class="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all">
-            <span class="text-base" x-text="item.icon"></span>
-            <span x-text="item.label"></span>
-          </button>
-        </template>
-      </nav>
-      <div class="p-4 border-t border-slate-700/50">
-        <div class="text-slate-500 text-xs space-y-1">
-          <div>KB: <span class="text-slate-300" x-text="(stats.knowledge_base_docs || 0) + ' docs'"></span></div>
-          <div>Sessions: <span class="text-slate-300" x-text="(stats.active_sessions || 0) + ' active'"></span></div>
-        </div>
-      </div>
+  <!-- Content -->
+  <div class="flex-1 flex flex-col overflow-hidden">
+    <!-- Top bar -->
+    <div class="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between flex-shrink-0">
+      <h1 class="text-lg font-semibold text-slate-800" x-text="navItems.find(n=>n.id===page)?.label"></h1>
+      <button @click="loadAll" class="flex items-center gap-2 text-sm text-slate-400 hover:text-indigo-600 transition">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+        Обновить
+      </button>
     </div>
 
-    <!-- Content area -->
-    <div class="flex-1 flex flex-col overflow-hidden">
+    <!-- Pages -->
+    <div class="flex-1 overflow-auto">
 
-      <!-- Top bar -->
-      <div class="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between flex-shrink-0">
-        <h1 class="text-lg font-semibold text-slate-800" x-text="navItems.find(n=>n.id===page)?.label"></h1>
-        <button @click="loadAll" class="flex items-center gap-2 text-sm text-slate-400 hover:text-indigo-600 transition">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-          Обновить
-        </button>
-      </div>
+      <!-- ══ DASHBOARD ═══════════════════════════════════════════════════════ -->
+      <div x-show="page==='dashboard'" class="p-6 space-y-5">
 
-      <!-- Pages -->
-      <div class="flex-1 overflow-auto">
-
-        <!-- ── DASHBOARD ─────────────────────────────────────────── -->
-        <div x-show="page==='dashboard'" class="p-6 space-y-6">
-
-          <!-- Stat cards -->
-          <div class="grid grid-cols-4 gap-4">
-            <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
-              <div class="text-3xl font-bold text-indigo-600" x-text="stats.active_sessions ?? '—'"></div>
-              <div class="text-sm text-slate-400 mt-1">Активных сессий</div>
-            </div>
-            <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
-              <div class="text-3xl font-bold text-emerald-500" x-text="stats.knowledge_base_docs ?? '—'"></div>
-              <div class="text-sm text-slate-400 mt-1">Документов в БЗ</div>
-            </div>
-            <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
-              <div class="text-lg font-bold text-purple-600 mt-1" x-text="stats.models?.agent ?? '—'"></div>
-              <div class="text-sm text-slate-400 mt-1">Модель агентов</div>
-            </div>
-            <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
-              <div class="text-lg font-bold text-orange-500 mt-1" x-text="stats.models?.router ?? '—'"></div>
-              <div class="text-sm text-slate-400 mt-1">Модель роутера</div>
-            </div>
-          </div>
-
-          <!-- Flow Diagram -->
-          <div class="bg-white rounded-2xl p-6 shadow-sm border border-slate-100">
-            <div class="flex items-center justify-between mb-6">
-              <h2 class="font-semibold text-slate-800">Схема обработки сообщений</h2>
-              <span class="text-xs text-slate-400 bg-slate-50 px-3 py-1 rounded-full">CrewAI Orchestrator</span>
-            </div>
-            <div class="flex flex-col items-center gap-0">
-
-              <!-- Client -->
-              <div class="flow-box border-slate-300 text-slate-600" style="min-width:160px">👤 Сообщение клиента</div>
-              <div class="flow-line arrow-down"></div>
-
-              <!-- Router -->
-              <div class="flow-box border-indigo-400 text-indigo-700 bg-indigo-50" style="min-width:260px">
-                ⚡ Роутер — Intent Classifier
-                <div class="text-xs font-normal text-indigo-400 mt-0.5">keywords (0 tokens) → LLM fallback</div>
-              </div>
-
-              <!-- Branch to agents -->
-              <div class="flow-line" style="height:20px"></div>
-              <div class="flex items-start w-full max-w-3xl justify-center gap-0">
-                <!-- Left line -->
-                <div class="flex-1 flex flex-col items-end pt-0">
-                  <div class="flow-line-h w-full" style="margin-top:0"></div>
-                </div>
-                <!-- Center line down -->
-                <div class="flow-line" style="height:20px; flex-shrink:0"></div>
-                <!-- Right line -->
-                <div class="flex-1 flex flex-col items-start pt-0">
-                  <div class="flow-line-h w-full"></div>
-                </div>
-              </div>
-
-              <!-- 3 Agents -->
-              <div class="flex gap-6 w-full max-w-3xl justify-center">
-                <div class="flex flex-col items-center gap-1 flex-1">
-                  <div class="text-xs text-slate-400 bg-rose-50 text-rose-500 px-2 py-0.5 rounded-full mb-1">sales_inquiry · qualification</div>
-                  <div class="flow-box border-rose-400 text-rose-700 bg-rose-50 w-full text-center">
-                    💼 Sales Agent
-                    <div class="text-xs font-normal text-rose-400 mt-0.5">RAG + CRM</div>
-                  </div>
-                </div>
-                <div class="flex flex-col items-center gap-1 flex-1">
-                  <div class="text-xs text-amber-500 bg-amber-50 px-2 py-0.5 rounded-full mb-1">product_advice</div>
-                  <div class="flow-box border-amber-400 text-amber-700 bg-amber-50 w-full text-center">
-                    💡 Advisor Agent
-                    <div class="text-xs font-normal text-amber-400 mt-0.5">RAG Search</div>
-                  </div>
-                </div>
-                <div class="flex flex-col items-center gap-1 flex-1">
-                  <div class="text-xs text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full mb-1">app_support · simple_faq</div>
-                  <div class="flow-box border-emerald-400 text-emerald-700 bg-emerald-50 w-full text-center">
-                    🛠 Support Agent
-                    <div class="text-xs font-normal text-emerald-400 mt-0.5">RAG Search</div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Merge back -->
-              <div class="flex items-end w-full max-w-3xl justify-center gap-0" style="height:20px">
-                <div class="flex-1 flex flex-col items-end">
-                  <div class="flow-line-h w-full" style="margin-bottom:0"></div>
-                </div>
-                <div class="flow-line" style="height:20px; flex-shrink:0"></div>
-                <div class="flex-1 flex flex-col items-start">
-                  <div class="flow-line-h w-full"></div>
-                </div>
-              </div>
-
-              <!-- Tools -->
-              <div class="flex gap-3">
-                <div class="flow-box border-violet-400 text-violet-700 bg-violet-50 text-xs px-4 py-2">🔍 RAG Search (pgvector)</div>
-                <div class="flow-box border-pink-400 text-pink-700 bg-pink-50 text-xs px-4 py-2">📋 CRM Lookup</div>
-                <div class="flow-box border-sky-400 text-sky-700 bg-sky-50 text-xs px-4 py-2">🧠 Dialogue Memory</div>
-              </div>
-              <div class="flow-line arrow-down"></div>
-
-              <!-- Response -->
-              <div class="flow-box border-slate-300 text-slate-600" style="min-width:160px">💬 Ответ клиенту</div>
-            </div>
-          </div>
-
-          <!-- Recent sessions -->
+        <!-- Stats -->
+        <div class="grid grid-cols-4 gap-4">
           <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
-            <h2 class="font-semibold text-slate-800 mb-4">Последние диалоги</h2>
-            <div x-show="sessions.length === 0" class="text-slate-400 text-sm text-center py-4">Нет активных диалогов</div>
-            <div class="space-y-2">
-              <template x-for="s in sessions.slice(0,5)" :key="s.session_id">
-                <div class="flex items-center justify-between py-2 border-b border-slate-50 last:border-0">
-                  <div class="font-mono text-xs text-slate-600" x-text="s.session_id"></div>
-                  <div class="text-xs text-slate-400" x-text="s.message_count + ' сообщ.'"></div>
-                  <button @click="page='conversations'; loadSession(s.session_id)"
-                    class="text-xs text-indigo-500 hover:text-indigo-700">Открыть →</button>
+            <div class="text-3xl font-bold text-indigo-600" x-text="stats.active_sessions??'—'"></div>
+            <div class="text-sm text-slate-400 mt-1">Активных сессий</div>
+          </div>
+          <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
+            <div class="text-3xl font-bold text-emerald-500" x-text="stats.knowledge_base_docs??'—'"></div>
+            <div class="text-sm text-slate-400 mt-1">Документов в БЗ</div>
+          </div>
+          <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
+            <div class="text-base font-bold text-purple-600 mt-1" x-text="stats.models?.agent??'—'"></div>
+            <div class="text-sm text-slate-400 mt-1">Модель агентов</div>
+          </div>
+          <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
+            <div class="text-base font-bold text-orange-500 mt-1" x-text="stats.models?.router??'—'"></div>
+            <div class="text-sm text-slate-400 mt-1">Модель роутера</div>
+          </div>
+        </div>
+
+        <!-- Diagram + Trace log -->
+        <div class="grid grid-cols-5 gap-5">
+
+          <!-- Flow diagram -->
+          <div class="col-span-3 bg-white rounded-2xl p-6 shadow-sm border border-slate-100">
+            <div class="flex items-center justify-between mb-5">
+              <div>
+                <h2 class="font-semibold text-slate-800">Схема оркестратора</h2>
+                <p class="text-xs text-slate-400 mt-0.5">Анимируется в реальном времени при тестовом чате ↓</p>
+              </div>
+              <span class="text-xs bg-indigo-50 text-indigo-500 px-3 py-1 rounded-full font-medium">CrewAI</span>
+            </div>
+
+            <!-- SVG diagram container -->
+            <div id="flow-diagram" class="relative select-none" style="min-height:400px">
+              <svg id="flow-svg" class="absolute inset-0 w-full pointer-events-none"
+                   style="height:100%;z-index:1;overflow:visible"></svg>
+
+              <div style="position:relative;z-index:2" class="flex flex-col items-center gap-6 pt-2">
+
+                <!-- Row 1: User -->
+                <div id="node-user" :class="fn('user','slate')"
+                     class="fn fn-slate border-slate-300 text-slate-600 text-center px-8">
+                  <div class="text-xl mb-1">👤</div>
+                  <div>Сообщение клиента</div>
+                </div>
+
+                <!-- Row 2: Memory + Router -->
+                <div class="flex items-center gap-8 w-full justify-center">
+                  <div id="node-memory" :class="fn('memory','sky')"
+                       class="fn fn-sky border-sky-300 text-sky-700 bg-sky-50/60 text-center px-4 py-3">
+                    <div class="text-lg mb-0.5">🧠</div>
+                    <div class="text-xs leading-tight">Dialogue<br>Memory</div>
+                  </div>
+                  <div id="node-router" :class="fn('router','indigo')"
+                       class="fn fn-indigo border-indigo-400 text-indigo-700 bg-indigo-50 text-center px-10 py-3">
+                    <div class="text-lg mb-0.5">⚡</div>
+                    <div class="font-semibold">Intent Router</div>
+                    <div class="text-xs font-normal text-indigo-400 mt-0.5"
+                         x-text="traceRouterLabel||'keywords → LLM fallback'"></div>
+                  </div>
+                  <div class="opacity-0 pointer-events-none fn border-sky-300 px-4 py-3">
+                    <div class="text-lg mb-0.5">🧠</div>
+                    <div class="text-xs leading-tight">Dialogue<br>Memory</div>
+                  </div>
+                </div>
+
+                <!-- Row 3: Agents -->
+                <div class="flex justify-around w-full px-2">
+                  <div class="flex flex-col items-center">
+                    <div id="node-direct" :class="fn('direct','sky')"
+                         class="fn fn-sky border-sky-300 text-sky-700 bg-sky-50 text-center w-28">
+                      <div class="text-lg mb-0.5">💬</div>
+                      <div>Direct LLM</div>
+                      <div class="text-xs font-normal text-sky-400 mt-0.5">greeting</div>
+                    </div>
+                  </div>
+                  <div class="flex flex-col items-center">
+                    <div id="node-sales" :class="fn('sales','rose')"
+                         class="fn fn-rose border-rose-400 text-rose-700 bg-rose-50 text-center w-28">
+                      <div class="text-lg mb-0.5">💼</div>
+                      <div>Sales Agent</div>
+                      <div class="text-xs font-normal text-rose-400 mt-0.5">RAG + CRM</div>
+                    </div>
+                  </div>
+                  <div class="flex flex-col items-center">
+                    <div id="node-advisor" :class="fn('advisor','amber')"
+                         class="fn fn-amber border-amber-400 text-amber-700 bg-amber-50 text-center w-28">
+                      <div class="text-lg mb-0.5">💡</div>
+                      <div>Advisor</div>
+                      <div class="text-xs font-normal text-amber-400 mt-0.5">RAG Search</div>
+                    </div>
+                  </div>
+                  <div class="flex flex-col items-center">
+                    <div id="node-support" :class="fn('support','emerald')"
+                         class="fn fn-emerald border-emerald-400 text-emerald-700 bg-emerald-50 text-center w-28">
+                      <div class="text-lg mb-0.5">🛠</div>
+                      <div>Support</div>
+                      <div class="text-xs font-normal text-emerald-400 mt-0.5">RAG Search</div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Row 4: Tools -->
+                <div class="flex justify-center gap-5">
+                  <div id="node-rag" :class="fn('rag','violet')"
+                       class="fn fn-violet border-violet-400 text-violet-700 bg-violet-50 text-center px-5">
+                    <div class="text-lg mb-0.5">🔍</div>
+                    <div>RAG Search</div>
+                    <div class="text-xs font-normal text-violet-400 mt-0.5">pgvector</div>
+                  </div>
+                  <div id="node-crm" :class="fn('crm','pink')"
+                       class="fn fn-pink border-pink-400 text-pink-700 bg-pink-50 text-center px-5">
+                    <div class="text-lg mb-0.5">📋</div>
+                    <div>CRM Lookup</div>
+                    <div class="text-xs font-normal text-pink-400 mt-0.5">client data</div>
+                  </div>
+                </div>
+
+                <!-- Row 5: Response -->
+                <div id="node-response" :class="fn('response','slate')"
+                     class="fn fn-slate border-slate-300 text-slate-600 text-center px-8">
+                  <div class="text-xl mb-1">💬</div>
+                  <div>Ответ клиенту</div>
+                </div>
+
+              </div><!-- /nodes -->
+            </div><!-- /flow-diagram -->
+          </div><!-- /col-span-3 -->
+
+          <!-- Trace log -->
+          <div class="col-span-2 bg-white rounded-2xl p-5 shadow-sm border border-slate-100 flex flex-col">
+            <div class="flex items-center justify-between mb-4">
+              <div>
+                <h2 class="font-semibold text-slate-800">Трассировка</h2>
+                <p class="text-xs text-slate-400 mt-0.5">Шаги выполнения последнего запроса</p>
+              </div>
+              <button @click="traceLog=[]" class="text-xs text-slate-400 hover:text-slate-600 transition">Очистить</button>
+            </div>
+            <div class="flex-1 overflow-auto space-y-2" style="max-height:360px">
+              <div x-show="traceLog.length===0"
+                   class="flex flex-col items-center justify-center h-40 text-slate-300">
+                <div class="text-4xl mb-2">🔍</div>
+                <div class="text-sm text-center">Отправьте сообщение в чат<br>ниже чтобы увидеть трассировку</div>
+              </div>
+              <template x-for="(step,i) in traceLog" :key="i">
+                <div class="trace-item flex items-start gap-2.5 p-3 rounded-xl text-xs"
+                     :class="{
+                       'bg-indigo-50/80':  step.type==='router',
+                       'bg-emerald-50/80': step.type==='done',
+                       'bg-rose-50/80':    step.type==='agent',
+                       'bg-violet-50/80':  step.type==='tool',
+                       'bg-sky-50/80':     step.type==='memory',
+                       'bg-slate-50':      step.type==='info'||step.type==='user',
+                     }">
+                  <span class="text-base leading-none mt-0.5 flex-shrink-0" x-text="step.icon"></span>
+                  <div class="flex-1 min-w-0">
+                    <div class="font-semibold text-slate-700" x-text="step.label"></div>
+                    <div x-show="step.detail" class="text-slate-400 mt-0.5 truncate" x-text="step.detail"></div>
+                  </div>
+                  <div class="text-slate-300 text-xs flex-shrink-0" x-text="step.time"></div>
                 </div>
               </template>
             </div>
           </div>
-        </div>
 
-        <!-- ── AGENTS ─────────────────────────────────────────────── -->
-        <div x-show="page==='agents'" class="p-6 space-y-4">
-          <template x-for="agent in agentConfigs" :key="agent.name">
-            <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
-              <div class="flex items-start justify-between">
-                <div class="flex items-center gap-3">
-                  <div class="text-3xl" x-text="agent.icon"></div>
-                  <div>
-                    <div class="font-semibold text-slate-800 text-base" x-text="agent.name"></div>
-                    <div class="text-sm text-slate-400" x-text="agent.role"></div>
-                  </div>
-                </div>
-                <div class="flex flex-wrap gap-1.5 max-w-xs justify-end">
-                  <template x-for="intent in agent.intents" :key="intent">
-                    <span class="bg-indigo-50 text-indigo-600 text-xs font-medium px-2.5 py-1 rounded-full" x-text="intent"></span>
+        </div><!-- /diagram+trace grid -->
+
+        <!-- ── TEST CHAT ──────────────────────────────────────────────────── -->
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+          <div class="flex items-center justify-between px-5 py-3.5 border-b border-slate-100 bg-gradient-to-r from-indigo-50/60 to-slate-50">
+            <div class="flex items-center gap-3">
+              <div class="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></div>
+              <span class="font-semibold text-slate-700 text-sm">Тестовый чат</span>
+              <span class="text-xs text-slate-400 hidden md:block">Пишите сообщения — схема оживает в реальном времени</span>
+            </div>
+            <div class="flex items-center gap-3">
+              <span x-show="testSessionId"
+                    class="font-mono text-xs text-slate-400 bg-slate-100 px-2 py-1 rounded-lg"
+                    x-text="'session: '+testSessionId?.substring(0,8)+'…'"></span>
+              <button @click="testMessages=[];testSessionId=null;traceLog=[];resetFlow()"
+                      class="text-xs text-slate-400 hover:text-slate-600 transition px-2 py-1 rounded-lg hover:bg-slate-100">
+                ↺ Новый чат
+              </button>
+            </div>
+          </div>
+
+          <!-- Messages -->
+          <div id="chat-messages" class="overflow-auto p-5 space-y-4 bg-slate-50/40"
+               style="height:260px">
+            <div x-show="testMessages.length===0"
+                 class="flex flex-col items-center justify-center h-full text-slate-300">
+              <div class="text-4xl mb-2">💬</div>
+              <div class="text-sm">Напишите что-нибудь — например «расскажи о ценах» или «привет»</div>
+            </div>
+
+            <template x-for="(msg,i) in testMessages" :key="i">
+              <div class="chat-msg flex" :class="msg.role==='user'?'justify-end':'justify-start'">
+                <div class="max-w-lg"
+                     :class="msg.role==='user'
+                       ? 'bg-indigo-600 text-white rounded-2xl rounded-tr-sm px-4 py-3 text-sm'
+                       : 'bg-white border border-slate-200 text-slate-700 rounded-2xl rounded-tl-sm px-4 py-3 text-sm shadow-sm'">
+                  <div x-text="msg.content"></div>
+                  <!-- Intent + routing badges on bot messages -->
+                  <template x-if="msg.intent">
+                    <div class="flex flex-wrap items-center gap-1.5 mt-2">
+                      <span class="text-xs px-2 py-0.5 rounded-full font-medium"
+                            :class="{
+                              'bg-rose-100 text-rose-600':    msg.intent.match(/sales|qualif/),
+                              'bg-amber-100 text-amber-600':  msg.intent.includes('advice'),
+                              'bg-emerald-100 text-emerald-600': msg.intent.match(/support|faq/),
+                              'bg-sky-100 text-sky-600':      msg.intent.match(/greeting|off_topic/),
+                              'bg-indigo-100 text-indigo-600':!msg.intent.match(/sales|qualif|advice|support|faq|greeting|off_topic/),
+                            }"
+                            x-text="'⟶ '+msg.intent"></span>
+                      <span class="text-xs px-2 py-0.5 rounded-full"
+                            :class="msg.usedLlm?'bg-orange-100 text-orange-600':'bg-green-100 text-green-600'"
+                            x-text="msg.usedLlm?'🤖 LLM routing':'⚡ keyword'"></span>
+                    </div>
                   </template>
                 </div>
               </div>
-              <div class="mt-4 grid grid-cols-3 gap-3">
-                <div class="bg-slate-50 rounded-xl p-3">
-                  <div class="text-xs text-slate-400 mb-1">Модель LLM</div>
-                  <div class="text-sm font-semibold text-slate-700" x-text="agent.model"></div>
-                </div>
-                <div class="bg-slate-50 rounded-xl p-3">
-                  <div class="text-xs text-slate-400 mb-1">Инструменты</div>
-                  <div class="text-sm font-medium text-slate-700" x-text="agent.tools.join(' · ')"></div>
-                </div>
-                <div class="bg-slate-50 rounded-xl p-3">
-                  <div class="text-xs text-slate-400 mb-1">Max iterations</div>
-                  <div class="text-sm font-semibold text-slate-700" x-text="agent.max_iter"></div>
-                </div>
-              </div>
-              <div class="mt-3 bg-indigo-50 rounded-xl p-3">
-                <div class="text-xs text-indigo-400 mb-1">Goal</div>
-                <div class="text-sm text-indigo-700" x-text="agent.goal"></div>
-              </div>
-            </div>
-          </template>
-        </div>
+            </template>
 
-        <!-- ── KNOWLEDGE BASE ─────────────────────────────────────── -->
-        <div x-show="page==='kb'" class="p-6 space-y-5">
-          <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
-            <h2 class="font-semibold text-slate-800 mb-4">Загрузить базу знаний</h2>
-            <label :class="uploading ? 'opacity-50 pointer-events-none' : 'cursor-pointer hover:border-indigo-400 hover:bg-indigo-50'"
-              class="block border-2 border-dashed border-slate-200 rounded-2xl p-10 text-center transition">
-              <input type="file" class="hidden" accept=".json" @change="handleFileUpload" :disabled="uploading">
-              <div class="text-4xl mb-3" x-text="uploading ? '⏳' : '📁'"></div>
-              <div class="font-medium text-slate-700 text-sm" x-text="uploading ? 'Загружаю документы...' : 'Нажмите или перетащите JSON файл'"></div>
-              <div class="text-xs text-slate-400 mt-1.5">Формат: [{"id":"...", "category":"...", "title":"...", "content":"..."}]</div>
-            </label>
-            <div x-show="uploadResult" x-transition class="mt-3 p-3 bg-emerald-50 text-emerald-700 text-sm rounded-xl flex items-center gap-2">
-              <span>✅</span><span x-text="uploadResult"></span>
-            </div>
-            <div x-show="uploadError" x-transition class="mt-3 p-3 bg-red-50 text-red-700 text-sm rounded-xl flex items-center gap-2">
-              <span>❌</span><span x-text="uploadError"></span>
-            </div>
-            <div class="flex gap-3 mt-4">
-              <button @click="reindex" :disabled="uploading"
-                class="px-5 py-2.5 bg-indigo-600 text-white text-sm font-medium rounded-xl hover:bg-indigo-700 disabled:opacity-50 transition active:scale-95">
-                🔄 Переиндексировать sample_knowledge.json
-              </button>
-              <button @click="clearKb"
-                class="px-5 py-2.5 bg-red-50 text-red-600 text-sm font-medium rounded-xl hover:bg-red-100 transition active:scale-95">
-                🗑 Очистить БЗ
-              </button>
+            <!-- Typing indicator -->
+            <div x-show="chatSending" class="flex justify-start chat-msg">
+              <div class="bg-white border border-slate-200 rounded-2xl rounded-tl-sm shadow-sm px-4 py-3">
+                <div class="flex items-center gap-1">
+                  <span class="tdot"></span><span class="tdot"></span><span class="tdot"></span>
+                </div>
+              </div>
             </div>
           </div>
 
-          <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
-            <div class="flex items-center justify-between mb-4">
-              <h2 class="font-semibold text-slate-800">Категории документов</h2>
-              <span class="bg-indigo-50 text-indigo-600 text-xs font-semibold px-3 py-1 rounded-full"
-                x-text="(stats.knowledge_base_docs || 0) + ' документов'"></span>
-            </div>
-            <div x-show="!stats.knowledge_base_docs" class="text-center py-8 text-slate-400">
-              <div class="text-4xl mb-2">📭</div>
-              <div class="text-sm">База знаний пуста — загрузите JSON файл</div>
-            </div>
-            <div x-show="stats.knowledge_base_docs > 0" class="grid grid-cols-5 gap-3">
-              <template x-for="cat in kbCategories" :key="cat.name">
-                <div class="bg-slate-50 rounded-xl p-4 text-center hover:bg-indigo-50 transition">
-                  <div class="text-2xl mb-1" x-text="cat.icon"></div>
-                  <div class="text-xs font-medium text-slate-600" x-text="cat.name"></div>
-                </div>
-              </template>
-            </div>
+          <!-- Input -->
+          <div class="p-4 border-t border-slate-100 bg-white flex items-center gap-3">
+            <input type="text" x-model="chatInput"
+              @keydown.enter="sendTestMessage"
+              :disabled="chatSending"
+              class="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+              placeholder="Напишите сообщение... (Enter для отправки)">
+            <button @click="sendTestMessage"
+              :disabled="chatSending||!chatInput.trim()"
+              class="bg-indigo-600 text-white rounded-xl px-5 py-2.5 text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 transition active:scale-95 flex items-center gap-2 flex-shrink-0">
+              <span x-text="chatSending?'…':'Отправить'"></span>
+              <svg x-show="!chatSending" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/>
+              </svg>
+            </button>
           </div>
-        </div>
+        </div><!-- /test chat -->
 
-        <!-- ── CONVERSATIONS ─────────────────────────────────────── -->
-        <div x-show="page==='conversations'" class="p-6 h-full">
-          <div class="flex gap-4" style="height: calc(100vh - 140px)">
-            <!-- Session list -->
-            <div class="w-72 bg-white rounded-2xl shadow-sm border border-slate-100 flex flex-col flex-shrink-0">
-              <div class="p-4 border-b border-slate-100 flex items-center justify-between">
-                <div class="font-semibold text-slate-700 text-sm">Сессии</div>
-                <span class="bg-slate-100 text-slate-500 text-xs px-2 py-0.5 rounded-full" x-text="sessions.length"></span>
-              </div>
-              <div class="flex-1 overflow-auto">
-                <div x-show="sessions.length===0" class="p-6 text-center text-slate-400 text-sm">
-                  <div class="text-3xl mb-2">💬</div>Нет диалогов
+      </div><!-- /dashboard -->
+
+      <!-- ══ AGENTS ══════════════════════════════════════════════════════════ -->
+      <div x-show="page==='agents'" class="p-6 space-y-4">
+        <template x-for="agent in agentConfigs" :key="agent.name">
+          <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
+            <div class="flex items-start justify-between">
+              <div class="flex items-center gap-3">
+                <div class="text-3xl" x-text="agent.icon"></div>
+                <div>
+                  <div class="font-semibold text-slate-800" x-text="agent.name"></div>
+                  <div class="text-sm text-slate-400" x-text="agent.role"></div>
                 </div>
-                <template x-for="s in sessions" :key="s.session_id">
-                  <button @click="loadSession(s.session_id)"
-                    :class="selectedSession===s.session_id ? 'bg-indigo-50 border-l-4 border-indigo-500' : 'hover:bg-slate-50 border-l-4 border-transparent'"
-                    class="w-full text-left p-4 border-b border-slate-50 transition">
-                    <div class="text-xs font-mono text-slate-600 truncate" x-text="s.session_id"></div>
-                    <div class="text-xs text-slate-400 mt-1" x-text="s.message_count + ' сообщений'"></div>
-                  </button>
+              </div>
+              <div class="flex flex-wrap gap-1.5 max-w-xs justify-end">
+                <template x-for="intent in agent.intents" :key="intent">
+                  <span class="bg-indigo-50 text-indigo-600 text-xs font-medium px-2.5 py-1 rounded-full" x-text="intent"></span>
                 </template>
               </div>
             </div>
-            <!-- Chat viewer -->
-            <div class="flex-1 bg-white rounded-2xl shadow-sm border border-slate-100 flex flex-col overflow-hidden">
-              <div x-show="!selectedSession" class="flex-1 flex items-center justify-center text-slate-400">
-                <div class="text-center">
-                  <div class="text-4xl mb-3">💬</div>
-                  <div class="text-sm">Выберите сессию слева</div>
-                </div>
+            <div class="mt-4 grid grid-cols-3 gap-3">
+              <div class="bg-slate-50 rounded-xl p-3">
+                <div class="text-xs text-slate-400 mb-1">Модель</div>
+                <div class="text-sm font-semibold text-slate-700" x-text="agent.model"></div>
               </div>
-              <template x-if="selectedSession">
-                <div class="flex flex-col flex-1 overflow-hidden">
-                  <div class="p-4 border-b border-slate-100 bg-slate-50 flex items-center gap-2">
-                    <div class="w-2 h-2 bg-emerald-400 rounded-full"></div>
-                    <span class="text-xs font-mono text-slate-600" x-text="selectedSession"></span>
-                  </div>
-                  <div class="flex-1 overflow-auto p-4 space-y-3 bg-slate-50">
-                    <template x-for="msg in sessionMessages" :key="msg.created_at">
-                      <div :class="msg.role==='user' ? 'flex justify-end' : 'flex justify-start'">
-                        <div :class="msg.role==='user'
-                          ? 'bg-indigo-600 text-white rounded-2xl rounded-tr-sm'
-                          : 'bg-white text-slate-700 border border-slate-200 rounded-2xl rounded-tl-sm'"
-                          class="max-w-sm lg:max-w-lg px-4 py-3 text-sm shadow-sm">
-                          <div x-text="msg.content"></div>
-                          <div class="text-xs opacity-50 mt-1.5" x-text="msg.created_at?.substring(0,16)?.replace('T',' ')"></div>
-                        </div>
-                      </div>
-                    </template>
-                  </div>
+              <div class="bg-slate-50 rounded-xl p-3">
+                <div class="text-xs text-slate-400 mb-1">Инструменты</div>
+                <div class="text-sm font-medium text-slate-700" x-text="agent.tools.join(' · ')"></div>
+              </div>
+              <div class="bg-slate-50 rounded-xl p-3">
+                <div class="text-xs text-slate-400 mb-1">Max iterations</div>
+                <div class="text-sm font-semibold text-slate-700" x-text="agent.max_iter"></div>
+              </div>
+            </div>
+            <div class="mt-3 bg-indigo-50 rounded-xl p-3">
+              <div class="text-xs text-indigo-400 mb-1">Goal</div>
+              <div class="text-sm text-indigo-700" x-text="agent.goal"></div>
+            </div>
+          </div>
+        </template>
+      </div>
 
-                  <!-- Correction panel -->
-                  <div class="p-4 border-t border-slate-100 bg-white">
-                    <div class="text-xs text-slate-400 mb-2">✏️ Исправить последний ответ бота (few-shot обучение)</div>
-                    <div class="flex gap-2">
-                      <input type="text" x-model="correction"
-                        class="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        placeholder="Правильный ответ...">
-                      <button @click="saveCorrection"
-                        class="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-xl hover:bg-indigo-700 transition active:scale-95">
-                        Сохранить
-                      </button>
-                    </div>
-                    <div x-show="correctionSaved" x-transition class="text-xs text-emerald-600 mt-1.5">✓ Сохранено в базу few-shot примеров</div>
-                  </div>
-                </div>
+      <!-- ══ KNOWLEDGE BASE ══════════════════════════════════════════════════ -->
+      <div x-show="page==='kb'" class="p-6 space-y-5">
+        <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
+          <h2 class="font-semibold text-slate-800 mb-4">Загрузить базу знаний</h2>
+          <label :class="uploading?'opacity-50 pointer-events-none':'cursor-pointer hover:border-indigo-400 hover:bg-indigo-50'"
+            class="block border-2 border-dashed border-slate-200 rounded-2xl p-10 text-center transition">
+            <input type="file" class="hidden" accept=".json" @change="handleFileUpload" :disabled="uploading">
+            <div class="text-4xl mb-3" x-text="uploading?'⏳':'📁'"></div>
+            <div class="font-medium text-slate-700 text-sm" x-text="uploading?'Загружаю документы...':'Нажмите или перетащите JSON файл'"></div>
+            <div class="text-xs text-slate-400 mt-1.5">Формат: [{"id":"...", "category":"...", "title":"...", "content":"..."}]</div>
+          </label>
+          <div x-show="uploadResult" x-transition class="mt-3 p-3 bg-emerald-50 text-emerald-700 text-sm rounded-xl flex items-center gap-2">
+            <span>✅</span><span x-text="uploadResult"></span>
+          </div>
+          <div x-show="uploadError" x-transition class="mt-3 p-3 bg-red-50 text-red-700 text-sm rounded-xl flex items-center gap-2">
+            <span>❌</span><span x-text="uploadError"></span>
+          </div>
+          <div class="flex gap-3 mt-4">
+            <button @click="reindex" :disabled="uploading"
+              class="px-5 py-2.5 bg-indigo-600 text-white text-sm font-medium rounded-xl hover:bg-indigo-700 disabled:opacity-50 transition active:scale-95">
+              🔄 Переиндексировать sample_knowledge.json
+            </button>
+            <button @click="clearKb"
+              class="px-5 py-2.5 bg-red-50 text-red-600 text-sm font-medium rounded-xl hover:bg-red-100 transition active:scale-95">
+              🗑 Очистить БЗ
+            </button>
+          </div>
+        </div>
+        <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="font-semibold text-slate-800">Категории документов</h2>
+            <span class="bg-indigo-50 text-indigo-600 text-xs font-semibold px-3 py-1 rounded-full"
+              x-text="(stats.knowledge_base_docs||0)+' документов'"></span>
+          </div>
+          <div x-show="!stats.knowledge_base_docs" class="text-center py-8 text-slate-400">
+            <div class="text-4xl mb-2">📭</div>
+            <div class="text-sm">База знаний пуста — загрузите JSON файл</div>
+          </div>
+          <div x-show="stats.knowledge_base_docs>0" class="grid grid-cols-5 gap-3">
+            <template x-for="cat in kbCategories" :key="cat.name">
+              <div class="bg-slate-50 rounded-xl p-4 text-center hover:bg-indigo-50 transition">
+                <div class="text-2xl mb-1" x-text="cat.icon"></div>
+                <div class="text-xs font-medium text-slate-600" x-text="cat.name"></div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══ CONVERSATIONS ═══════════════════════════════════════════════════ -->
+      <div x-show="page==='conversations'" class="p-6 h-full">
+        <div class="flex gap-4" style="height:calc(100vh - 140px)">
+          <div class="w-72 bg-white rounded-2xl shadow-sm border border-slate-100 flex flex-col flex-shrink-0">
+            <div class="p-4 border-b border-slate-100 flex items-center justify-between">
+              <div class="font-semibold text-slate-700 text-sm">Сессии</div>
+              <span class="bg-slate-100 text-slate-500 text-xs px-2 py-0.5 rounded-full" x-text="sessions.length"></span>
+            </div>
+            <div class="flex-1 overflow-auto">
+              <div x-show="sessions.length===0" class="p-6 text-center text-slate-400 text-sm">
+                <div class="text-3xl mb-2">💬</div>Нет диалогов
+              </div>
+              <template x-for="s in sessions" :key="s.session_id">
+                <button @click="loadSession(s.session_id)"
+                  :class="selectedSession===s.session_id?'bg-indigo-50 border-l-4 border-indigo-500':'hover:bg-slate-50 border-l-4 border-transparent'"
+                  class="w-full text-left p-4 border-b border-slate-50 transition">
+                  <div class="text-xs font-mono text-slate-600 truncate" x-text="s.session_id"></div>
+                  <div class="text-xs text-slate-400 mt-1" x-text="s.message_count+' сообщений'"></div>
+                </button>
               </template>
             </div>
           </div>
-        </div>
-
-        <!-- ── WIDGET ─────────────────────────────────────────────── -->
-        <div x-show="page==='widget'" class="p-6 space-y-5">
-          <div class="grid grid-cols-2 gap-5">
-
-            <!-- Settings -->
-            <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
-              <h2 class="font-semibold text-slate-800 mb-5">Настройки виджета</h2>
-              <div class="space-y-4">
-                <div>
-                  <label class="text-sm font-medium text-slate-600 block mb-2">Цвет кнопки</label>
-                  <div class="flex items-center gap-3">
-                    <input type="color" x-model="wColor" class="w-12 h-10 rounded-lg border border-slate-200 cursor-pointer p-0.5">
-                    <span class="text-sm font-mono text-slate-500" x-text="wColor"></span>
+          <div class="flex-1 bg-white rounded-2xl shadow-sm border border-slate-100 flex flex-col overflow-hidden">
+            <div x-show="!selectedSession" class="flex-1 flex items-center justify-center text-slate-400">
+              <div class="text-center"><div class="text-4xl mb-3">💬</div><div class="text-sm">Выберите сессию слева</div></div>
+            </div>
+            <template x-if="selectedSession">
+              <div class="flex flex-col flex-1 overflow-hidden">
+                <div class="p-4 border-b border-slate-100 bg-slate-50 flex items-center gap-2">
+                  <div class="w-2 h-2 bg-emerald-400 rounded-full"></div>
+                  <span class="text-xs font-mono text-slate-600" x-text="selectedSession"></span>
+                </div>
+                <div class="flex-1 overflow-auto p-4 space-y-3 bg-slate-50">
+                  <template x-for="msg in sessionMessages" :key="msg.created_at">
+                    <div :class="msg.role==='user'?'flex justify-end':'flex justify-start'">
+                      <div :class="msg.role==='user'
+                          ?'bg-indigo-600 text-white rounded-2xl rounded-tr-sm'
+                          :'bg-white text-slate-700 border border-slate-200 rounded-2xl rounded-tl-sm'"
+                        class="max-w-sm lg:max-w-lg px-4 py-3 text-sm shadow-sm">
+                        <div x-text="msg.content"></div>
+                        <div class="text-xs opacity-50 mt-1.5" x-text="msg.created_at?.substring(0,16)?.replace('T',' ')"></div>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+                <div class="p-4 border-t border-slate-100 bg-white">
+                  <div class="text-xs text-slate-400 mb-2">✏️ Исправить последний ответ (few-shot)</div>
+                  <div class="flex gap-2">
+                    <input type="text" x-model="correction"
+                      class="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      placeholder="Правильный ответ...">
+                    <button @click="saveCorrection"
+                      class="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-xl hover:bg-indigo-700 transition active:scale-95">Сохранить</button>
                   </div>
-                </div>
-                <div>
-                  <label class="text-sm font-medium text-slate-600 block mb-2">Название компании</label>
-                  <input type="text" x-model="wCompany"
-                    class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                </div>
-                <div>
-                  <label class="text-sm font-medium text-slate-600 block mb-2">Приветственное сообщение</label>
-                  <textarea x-model="wGreeting" rows="2"
-                    class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"></textarea>
-                </div>
-                <div>
-                  <label class="text-sm font-medium text-slate-600 block mb-2">URL API сервера</label>
-                  <input type="text" x-model="wApiUrl"
-                    class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                  <div x-show="correctionSaved" x-transition class="text-xs text-emerald-600 mt-1.5">✓ Сохранено в базу few-shot примеров</div>
                 </div>
               </div>
-            </div>
-
-            <!-- Embed code -->
-            <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
-              <div class="flex items-center justify-between mb-4">
-                <h2 class="font-semibold text-slate-800">Код для вставки на сайт</h2>
-                <button @click="copyEmbed"
-                  class="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg transition"
-                  :class="copied ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'">
-                  <span x-text="copied ? '✓ Скопировано!' : '📋 Копировать'"></span>
-                </button>
-              </div>
-              <div class="bg-slate-900 rounded-xl p-4 overflow-auto" style="max-height: 200px">
-                <pre class="text-xs text-emerald-400" x-text="embedCode"></pre>
-              </div>
-              <div class="mt-4 space-y-2 p-4 bg-amber-50 rounded-xl">
-                <div class="text-sm font-semibold text-amber-800">Как добавить на сайт</div>
-                <div class="text-xs text-amber-700 space-y-1">
-                  <div>1. Скопируйте код кнопкой выше</div>
-                  <div>2. Вставьте перед <code class="bg-amber-100 px-1 rounded">&lt;/body&gt;</code> на вашем сайте</div>
-                  <div>3. Виджет появится в правом нижнем углу</div>
-                  <div>4. Для production — настройте HTTPS + домен</div>
-                </div>
-              </div>
-            </div>
+            </template>
           </div>
+        </div>
+      </div>
 
-          <!-- Live Preview -->
+      <!-- ══ WIDGET ══════════════════════════════════════════════════════════ -->
+      <div x-show="page==='widget'" class="p-6 space-y-5">
+        <div class="grid grid-cols-2 gap-5">
           <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
-            <h2 class="font-semibold text-slate-800 mb-4">Предпросмотр</h2>
-            <div class="relative bg-gradient-to-br from-slate-100 to-slate-200 rounded-xl overflow-hidden" style="height:380px">
-              <div class="absolute inset-0 flex items-center justify-center">
-                <div class="text-slate-300 text-sm">Ваш сайт</div>
+            <h2 class="font-semibold text-slate-800 mb-5">Настройки виджета</h2>
+            <div class="space-y-4">
+              <div>
+                <label class="text-sm font-medium text-slate-600 block mb-2">Цвет кнопки</label>
+                <div class="flex items-center gap-3">
+                  <input type="color" x-model="wColor" class="w-12 h-10 rounded-lg border border-slate-200 cursor-pointer p-0.5">
+                  <span class="text-sm font-mono text-slate-500" x-text="wColor"></span>
+                </div>
               </div>
-              <!-- Chat button -->
-              <div class="absolute bottom-5 right-5">
-                <button @click="pOpen=!pOpen" :style="'background:'+wColor"
-                  class="w-14 h-14 rounded-full shadow-xl flex items-center justify-center text-white text-2xl hover:scale-110 transition-transform">
-                  <span x-text="pOpen ? '✕' : '💬'"></span>
-                </button>
+              <div>
+                <label class="text-sm font-medium text-slate-600 block mb-2">Название компании</label>
+                <input type="text" x-model="wCompany" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
               </div>
-              <!-- Chat window -->
-              <div x-show="pOpen" x-transition:enter="transition ease-out duration-200"
-                x-transition:enter-start="opacity-0 translate-y-4"
-                x-transition:enter-end="opacity-100 translate-y-0"
-                class="absolute bottom-24 right-5 w-72 bg-white rounded-2xl shadow-2xl overflow-hidden">
-                <div :style="'background:'+wColor" class="p-3 text-white">
-                  <div class="font-semibold text-sm" x-text="wCompany"></div>
-                  <div class="text-xs opacity-75">Онлайн · ответим быстро</div>
-                </div>
-                <div class="p-3 min-h-20 bg-slate-50">
-                  <div class="inline-block bg-white border border-slate-100 rounded-2xl rounded-tl-sm px-3 py-2 text-xs text-slate-700 shadow-sm max-w-full">
-                    <span x-text="wGreeting"></span>
-                  </div>
-                </div>
-                <div class="flex items-center gap-2 p-2 bg-white border-t border-slate-100">
-                  <div class="flex-1 bg-slate-100 rounded-full px-3 py-2 text-xs text-slate-400">Напишите сообщение...</div>
-                  <div :style="'background:'+wColor" class="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs flex-shrink-0">➤</div>
-                </div>
+              <div>
+                <label class="text-sm font-medium text-slate-600 block mb-2">Приветственное сообщение</label>
+                <textarea x-model="wGreeting" rows="2" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"></textarea>
+              </div>
+              <div>
+                <label class="text-sm font-medium text-slate-600 block mb-2">URL API</label>
+                <input type="text" x-model="wApiUrl" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+              </div>
+            </div>
+          </div>
+          <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
+            <div class="flex items-center justify-between mb-4">
+              <h2 class="font-semibold text-slate-800">Код для вставки</h2>
+              <button @click="copyEmbed"
+                class="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg transition"
+                :class="copied?'bg-emerald-50 text-emerald-600':'bg-slate-100 text-slate-600 hover:bg-slate-200'">
+                <span x-text="copied?'✓ Скопировано!':'📋 Копировать'"></span>
+              </button>
+            </div>
+            <div class="bg-slate-900 rounded-xl p-4 overflow-auto" style="max-height:200px">
+              <pre class="text-xs text-emerald-400" x-text="embedCode"></pre>
+            </div>
+            <div class="mt-4 p-4 bg-amber-50 rounded-xl space-y-1">
+              <div class="text-sm font-semibold text-amber-800">Как добавить на сайт</div>
+              <div class="text-xs text-amber-700 space-y-1">
+                <div>1. Скопируйте код выше</div>
+                <div>2. Вставьте перед <code class="bg-amber-100 px-1 rounded">&lt;/body&gt;</code></div>
+                <div>3. Виджет появится в правом нижнем углу</div>
               </div>
             </div>
           </div>
         </div>
+        <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
+          <h2 class="font-semibold text-slate-800 mb-4">Предпросмотр</h2>
+          <div class="relative bg-gradient-to-br from-slate-100 to-slate-200 rounded-xl overflow-hidden" style="height:380px">
+            <div class="absolute inset-0 flex items-center justify-center text-slate-300 text-sm">Ваш сайт</div>
+            <div class="absolute bottom-5 right-5">
+              <button @click="pOpen=!pOpen" :style="'background:'+wColor"
+                class="w-14 h-14 rounded-full shadow-xl flex items-center justify-center text-white text-2xl hover:scale-110 transition-transform">
+                <span x-text="pOpen?'✕':'💬'"></span>
+              </button>
+            </div>
+            <div x-show="pOpen" x-transition:enter="transition ease-out duration-200"
+              x-transition:enter-start="opacity-0 translate-y-4" x-transition:enter-end="opacity-100 translate-y-0"
+              class="absolute bottom-24 right-5 w-72 bg-white rounded-2xl shadow-2xl overflow-hidden">
+              <div :style="'background:'+wColor" class="p-3 text-white">
+                <div class="font-semibold text-sm" x-text="wCompany"></div>
+                <div class="text-xs opacity-75">Онлайн · ответим быстро</div>
+              </div>
+              <div class="p-3 min-h-20 bg-slate-50">
+                <div class="inline-block bg-white border border-slate-100 rounded-2xl rounded-tl-sm px-3 py-2 text-xs text-slate-700 shadow-sm">
+                  <span x-text="wGreeting"></span>
+                </div>
+              </div>
+              <div class="flex items-center gap-2 p-2 bg-white border-t border-slate-100">
+                <div class="flex-1 bg-slate-100 rounded-full px-3 py-2 text-xs text-slate-400">Напишите сообщение...</div>
+                <div :style="'background:'+wColor" class="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs">➤</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
 
-      </div><!-- /pages -->
-    </div><!-- /content -->
-  </div><!-- /main panel -->
+    </div><!-- /pages -->
+  </div><!-- /content -->
+</div><!-- /main panel -->
 
 <script>
 function adminApp() {
   return {
-    authenticated: false,
-    password: '',
-    loginError: '',
-    token: '',
+    authenticated: false, password: '', loginError: '', token: '',
     page: 'dashboard',
 
     navItems: [
-      { id: 'dashboard',     label: 'Дашборд',      icon: '📊' },
-      { id: 'agents',        label: 'Агенты',        icon: '🤖' },
-      { id: 'kb',            label: 'База знаний',   icon: '📚' },
-      { id: 'conversations', label: 'Диалоги',       icon: '💬' },
-      { id: 'widget',        label: 'Виджет',        icon: '🔧' },
+      { id:'dashboard',     label:'Дашборд',      icon:'📊' },
+      { id:'agents',        label:'Агенты',        icon:'🤖' },
+      { id:'kb',            label:'База знаний',   icon:'📚' },
+      { id:'conversations', label:'Диалоги',       icon:'💬' },
+      { id:'widget',        label:'Виджет',        icon:'🔧' },
     ],
 
-    stats: {},
-    sessions: [],
-    selectedSession: null,
-    sessionMessages: [],
-    correction: '',
-    correctionSaved: false,
-    uploading: false,
-    uploadResult: '',
-    uploadError: '',
+    stats: {}, sessions: [], selectedSession: null, sessionMessages: [],
+    correction: '', correctionSaved: false, uploading: false,
+    uploadResult: '', uploadError: '',
 
     kbCategories: [
-      { name: 'features',     icon: '⚙️' },
-      { name: 'pricing',      icon: '💰' },
-      { name: 'howto',        icon: '📖' },
-      { name: 'faq',          icon: '❓' },
-      { name: 'sales_scripts',icon: '🎯' },
+      { name:'features', icon:'⚙️' }, { name:'pricing', icon:'💰' },
+      { name:'howto', icon:'📖' },    { name:'faq', icon:'❓' },
+      { name:'sales_scripts', icon:'🎯' },
     ],
 
     agentConfigs: [
-      { icon:'💼', name:'Sales Agent',    role:'Sales Specialist',
+      { icon:'💼', name:'Sales Agent',   role:'Sales Specialist',
         model:'gpt-4o-mini', tools:['RAG Search','CRM Lookup'], max_iter:6,
         intents:['sales_inquiry','qualification'],
         goal:'Выяснить потребности клиента, квалифицировать лид и направить к покупке или демо.' },
-      { icon:'💡', name:'Advisor Agent',  role:'Product Advisor',
+      { icon:'💡', name:'Advisor Agent', role:'Product Advisor',
         model:'gpt-4o-mini', tools:['RAG Search'], max_iter:6,
         intents:['product_advice'],
-        goal:'Подобрать оптимальное решение под требования клиента, опираясь на базу знаний.' },
-      { icon:'🛠', name:'Support Agent',  role:'Support Specialist',
+        goal:'Подобрать оптимальное решение под требования клиента.' },
+      { icon:'🛠', name:'Support Agent', role:'Support Specialist',
         model:'gpt-4o-mini', tools:['RAG Search'], max_iter:6,
         intents:['simple_faq','app_support'],
-        goal:'Помочь клиенту разобраться с вопросом, дать точную информацию из базы знаний.' },
-      { icon:'⚡', name:'Router',         role:'Intent Classifier',
+        goal:'Помочь клиенту разобраться с вопросом, дать точную информацию из БЗ.' },
+      { icon:'⚡', name:'Router',        role:'Intent Classifier',
         model:'gpt-4o-mini', tools:['Keywords','LLM fallback'], max_iter:1,
         intents:['all intents'],
-        goal:'Быстро классифицировать интент и направить к нужному агенту. Keywords → 0 tokens.' },
+        goal:'Классифицировать интент за 0 токенов (keywords) или LLM fallback.' },
     ],
 
-    // Widget settings
-    wColor:   '#4F46E5',
-    wCompany: 'Jericho Group',
+    wColor: '#4F46E5', wCompany: 'Jericho Group',
     wGreeting: 'Привет! Чем могу помочь?',
-    wApiUrl:  window.location.origin,
-    pOpen:    false,
-    copied:   false,
+    wApiUrl: window.location.origin, pOpen: false, copied: false,
 
     get embedCode() {
       return `<script src="${this.wApiUrl}/widget/chatbot-widget.js"\n  data-api-url="${this.wApiUrl}"\n  data-company="${this.wCompany}"\n  data-color="${this.wColor}"\n  data-greeting="${this.wGreeting}">\n<\/script>`;
     },
 
-    h() { return { 'X-Admin-Token': this.token, 'Content-Type': 'application/json' }; },
+    // ── Flow state ────────────────────────────────────────────────────────
+    flowState: {
+      user:'idle', memory:'idle', router:'idle',
+      direct:'idle', sales:'idle', advisor:'idle', support:'idle',
+      rag:'idle', crm:'idle', response:'idle',
+    },
+    traceLog: [],
+    traceRouterLabel: '',
+
+    // Test chat
+    testMessages: [], testSessionId: null, chatInput: '', chatSending: false,
+
+    // CSS class helper for nodes
+    fn(node, color) {
+      const s = this.flowState[node];
+      let cls = `fn-${color}`;
+      if (s === 'active') cls += ' fn-active';
+      if (s === 'done')   cls += ' fn-done';
+      return cls;
+    },
+
+    resetFlow() {
+      Object.keys(this.flowState).forEach(k => this.flowState[k] = 'idle');
+      this.traceRouterLabel = '';
+      this.$nextTick(() => this.drawConnections());
+    },
+
+    now() {
+      return new Date().toLocaleTimeString('ru', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+    },
+
+    addTrace(icon, label, detail, type) {
+      this.traceLog.push({ icon, label, detail: detail||'', type, time: this.now() });
+    },
+
+    // Animate the full flow after API responds with intent + routing info
+    async animateFlow(intent, usedLlm) {
+      this.resetFlow();
+      const set = (node, state, ms) => new Promise(r => setTimeout(() => {
+        this.flowState[node] = state;
+        this.$nextTick(() => this.drawConnections());
+        r();
+      }, ms));
+
+      const agentKey = {
+        greeting:'direct', off_topic:'direct',
+        sales_inquiry:'sales', qualification:'sales',
+        product_advice:'advisor',
+        simple_faq:'support', app_support:'support',
+      }[intent] || 'support';
+
+      const agentLabel = {
+        direct:'Direct LLM', sales:'Sales Agent',
+        advisor:'Advisor Agent', support:'Support Agent',
+      };
+
+      // Step 1 — user
+      await set('user', 'active', 0);
+      this.addTrace('📨', 'Сообщение получено', null, 'info');
+
+      // Step 2 — memory + router active
+      await set('user', 'done', 200);
+      await set('memory', 'active', 300);
+      await set('router', 'active', 450);
+      this.addTrace('🧠', 'Загрузка истории диалога', null, 'memory');
+
+      // Step 3 — intent classified
+      await set('memory', 'done', 750);
+      const routingHow = usedLlm ? `LLM (~150 токенов)` : `keyword match (0 токенов)`;
+      this.addTrace('⚡', `Интент: ${intent}`, routingHow, 'router');
+      this.traceRouterLabel = `${intent} · ${usedLlm ? 'LLM' : 'keyword'}`;
+      await set('router', 'done', 950);
+
+      // Step 4 — agent
+      await set(agentKey, 'active', 1050);
+      this.addTrace('🤖', `${agentLabel[agentKey]} запущен`, `intent: ${intent}`, 'agent');
+
+      // Step 5 — tools
+      if (agentKey === 'sales') {
+        await set('rag', 'active', 1350);
+        this.addTrace('🔍', 'RAG Search', 'Поиск по базе знаний', 'tool');
+        await set('crm', 'active', 1550);
+        this.addTrace('📋', 'CRM Lookup', 'Поиск клиента в CRM', 'tool');
+        await set('rag', 'done', 1850);
+        await set('crm', 'done', 1950);
+      } else if (agentKey !== 'direct') {
+        await set('rag', 'active', 1350);
+        this.addTrace('🔍', 'RAG Search', 'Поиск по базе знаний', 'tool');
+        await set('rag', 'done', 1850);
+      }
+
+      await set(agentKey, 'done', 2050);
+
+      // Step 6 — response
+      await set('response', 'active', 2150);
+      this.addTrace('✅', 'Ответ сформирован', null, 'done');
+      await set('response', 'done', 2450);
+    },
+
+    // ── Test chat ─────────────────────────────────────────────────────────
+    async sendTestMessage() {
+      const msg = this.chatInput.trim();
+      if (!msg || this.chatSending) return;
+      this.chatInput = '';
+      this.chatSending = true;
+      this.traceLog = [];
+      this.resetFlow();
+
+      this.testMessages.push({ role:'user', content:msg });
+      this.$nextTick(() => this.scrollChat());
+
+      // Pre-response animation: user → router
+      this.flowState.user = 'active';
+      this.$nextTick(() => this.drawConnections());
+      this.addTrace('📨', 'Отправлено сообщение', msg.length > 50 ? msg.substring(0,50)+'…' : msg, 'info');
+      setTimeout(() => {
+        this.flowState.user = 'done';
+        this.flowState.memory = 'active';
+        this.flowState.router = 'active';
+        this.$nextTick(() => this.drawConnections());
+        this.addTrace('⚡', 'Роутер анализирует…', null, 'router');
+      }, 350);
+
+      try {
+        const r = await fetch('/chat', {
+          method: 'POST',
+          headers: { 'Content-Type':'application/json' },
+          body: JSON.stringify({ message: msg, session_id: this.testSessionId }),
+        });
+        const data = await r.json();
+        if (r.ok) {
+          this.testSessionId = data.session_id;
+          this.testMessages.push({
+            role: 'assistant',
+            content: data.response,
+            intent: data.intent,
+            usedLlm: data.used_llm_for_routing,
+          });
+          this.$nextTick(() => this.scrollChat());
+          await this.animateFlow(data.intent, data.used_llm_for_routing);
+        } else {
+          this.testMessages.push({ role:'assistant', content:'❌ Ошибка: '+(data.detail||'неизвестная') });
+          this.resetFlow();
+        }
+      } catch(e) {
+        this.testMessages.push({ role:'assistant', content:'❌ Нет соединения: '+e.message });
+        this.resetFlow();
+      } finally {
+        this.chatSending = false;
+      }
+    },
+
+    scrollChat() {
+      const el = document.getElementById('chat-messages');
+      if (el) el.scrollTop = el.scrollHeight;
+    },
+
+    // ── SVG connections ───────────────────────────────────────────────────
+    drawConnections() {
+      const svg = document.getElementById('flow-svg');
+      const wrap = document.getElementById('flow-diagram');
+      if (!svg || !wrap) return;
+      svg.innerHTML = '';
+      const wr = wrap.getBoundingClientRect();
+
+      const c = (id) => {
+        const el = document.getElementById(id);
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return {
+          cx: r.left + r.width/2 - wr.left,
+          cy: r.top + r.height/2 - wr.top,
+          top:    r.top    - wr.top,
+          bottom: r.bottom - wr.top,
+          left:   r.left   - wr.left,
+          right:  r.right  - wr.left,
+        };
+      };
+
+      const edges = [
+        ['user','router'],   ['memory','router'],
+        ['router','direct'], ['router','sales'], ['router','advisor'], ['router','support'],
+        ['direct','response'],
+        ['sales','rag'],  ['sales','crm'],
+        ['advisor','rag'], ['support','rag'],
+        ['rag','response'], ['crm','response'],
+      ];
+
+      // Connection state: active if target is active; done if both source+target done
+      const edgeState = (from, to) => {
+        const fs = this.flowState[from], ts = this.flowState[to];
+        if (ts === 'active') return 'active';
+        if (ts === 'done' && (fs === 'done' || fs === 'active')) return 'done';
+        return 'idle';
+      };
+
+      edges.forEach(([from, to]) => {
+        const f = c(from), t = c(to);
+        if (!f || !t) return;
+
+        const state = edgeState(from, to);
+        const color = state === 'active' ? '#6366f1' : state === 'done' ? '#34d399' : '#e2e8f0';
+        const sw = state === 'idle' ? 1.5 : 2.5;
+        const bend = Math.min(Math.abs(t.cy - f.cy) * 0.45, 70);
+
+        const d = `M ${f.cx} ${f.bottom} C ${f.cx} ${f.bottom+bend} ${t.cx} ${t.top-bend} ${t.cx} ${t.top}`;
+
+        // Draw path
+        const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+        path.setAttribute('d', d);
+        path.setAttribute('stroke', color);
+        path.setAttribute('stroke-width', sw);
+        path.setAttribute('fill', 'none');
+        path.setAttribute('stroke-linecap', 'round');
+        if (state === 'active') {
+          path.setAttribute('stroke-dasharray', '7 5');
+          path.setAttribute('class', 'svg-flow');
+        }
+        svg.appendChild(path);
+
+        // Arrowhead at target
+        if (state !== 'idle') {
+          const poly = document.createElementNS('http://www.w3.org/2000/svg','polygon');
+          const ax = t.cx, ay = t.top;
+          poly.setAttribute('points', `${ax-4},${ay-7} ${ax+4},${ay-7} ${ax},${ay}`);
+          poly.setAttribute('fill', color);
+          svg.appendChild(poly);
+        }
+      });
+    },
+
+    // ── Auth & data loading ───────────────────────────────────────────────
+    h() { return { 'X-Admin-Token': this.token, 'Content-Type':'application/json' }; },
 
     async login() {
       try {
@@ -555,24 +942,17 @@ function adminApp() {
           this.token = this.password;
           this.authenticated = true;
           sessionStorage.setItem('adminToken', this.token);
-          const data = await r.json();
-          this.stats = data;
-          this.wCompany = data.company || this.wCompany;
+          this.stats = await r.json();
+          this.wCompany = this.stats.company || this.wCompany;
           this.loadAll();
         } else { this.loginError = 'Неверный пароль'; }
-      } catch(e) { this.loginError = 'Ошибка соединения: ' + e.message; }
+      } catch(e) { this.loginError = 'Ошибка: '+e.message; }
     },
 
-    async loadAll() {
-      await this.refreshStats();
-      await this.loadSessions();
-    },
+    async loadAll() { await this.refreshStats(); await this.loadSessions(); },
 
     async refreshStats() {
-      try {
-        const r = await fetch('/health');
-        this.stats = await r.json();
-      } catch(e) {}
+      try { const r = await fetch('/health'); this.stats = await r.json(); } catch(e) {}
     },
 
     async loadSessions() {
@@ -591,18 +971,14 @@ function adminApp() {
     },
 
     async handleFileUpload(e) {
-      const file = e.target.files[0];
-      if (!file) return;
+      const file = e.target.files[0]; if (!file) return;
       this.uploading = true; this.uploadResult = ''; this.uploadError = '';
       try {
-        const fd = new FormData();
-        fd.append('file', file);
-        const r = await fetch('/admin/api/knowledge/upload', {
-          method: 'POST', headers: { 'X-Admin-Token': this.token }, body: fd
-        });
+        const fd = new FormData(); fd.append('file', file);
+        const r = await fetch('/admin/api/knowledge/upload', { method:'POST', headers:{'X-Admin-Token':this.token}, body:fd });
         const d = await r.json();
         if (r.ok) { this.uploadResult = `Загружено ${d.uploaded} документов. Всего: ${d.total}`; this.refreshStats(); }
-        else this.uploadError = d.detail || 'Ошибка';
+        else this.uploadError = d.detail||'Ошибка';
       } catch(e) { this.uploadError = e.message; }
       finally { this.uploading = false; }
     },
@@ -610,41 +986,32 @@ function adminApp() {
     async reindex() {
       this.uploading = true; this.uploadResult = ''; this.uploadError = '';
       try {
-        const r = await fetch('/admin/ingest', {
-          method: 'POST', headers: this.h(),
-          body: JSON.stringify({ data_file: './data/sample_knowledge.json' })
-        });
+        const r = await fetch('/admin/ingest', { method:'POST', headers:this.h(), body:JSON.stringify({data_file:'./data/sample_knowledge.json'}) });
         const d = await r.json();
         if (r.ok) { this.uploadResult = `Переиндексировано. Документов: ${d.documents_count}`; this.refreshStats(); }
-        else this.uploadError = d.detail || 'Ошибка';
+        else this.uploadError = d.detail||'Ошибка';
       } catch(e) { this.uploadError = e.message; }
       finally { this.uploading = false; }
     },
 
     async clearKb() {
-      if (!confirm('Очистить всю базу знаний? Это нельзя отменить.')) return;
+      if (!confirm('Очистить всю базу знаний? Нельзя отменить.')) return;
       try {
-        const r = await fetch('/admin/api/knowledge', { method: 'DELETE', headers: this.h() });
+        const r = await fetch('/admin/api/knowledge', { method:'DELETE', headers:this.h() });
         if (r.ok) { this.uploadResult = 'База знаний очищена'; this.refreshStats(); }
       } catch(e) {}
     },
 
     async saveCorrection() {
       if (!this.correction || !this.selectedSession) return;
-      const lastUser = [...this.sessionMessages].reverse().find(m => m.role === 'user');
-      const lastBot  = [...this.sessionMessages].reverse().find(m => m.role === 'assistant');
+      const lastUser = [...this.sessionMessages].reverse().find(m => m.role==='user');
+      const lastBot  = [...this.sessionMessages].reverse().find(m => m.role==='assistant');
       try {
         await fetch('/admin/api/correct', {
-          method: 'POST', headers: this.h(),
-          body: JSON.stringify({
-            intent: 'unknown',
-            user_msg: lastUser?.content || '',
-            bad_answer: lastBot?.content || '',
-            good_answer: this.correction,
-          })
+          method:'POST', headers:this.h(),
+          body: JSON.stringify({ intent:'unknown', user_msg:lastUser?.content||'', bad_answer:lastBot?.content||'', good_answer:this.correction }),
         });
-        this.correctionSaved = true;
-        this.correction = '';
+        this.correctionSaved = true; this.correction = '';
         setTimeout(() => this.correctionSaved = false, 3000);
       } catch(e) {}
     },
@@ -657,8 +1024,15 @@ function adminApp() {
     init() {
       const saved = sessionStorage.getItem('adminToken');
       if (saved) { this.password = saved; this.login(); }
-      this.$watch('page', p => { if (p === 'conversations') this.loadSessions(); });
-    }
+      this.$watch('page', p => {
+        if (p === 'conversations') this.loadSessions();
+        if (p === 'dashboard') this.$nextTick(() => this.drawConnections());
+      });
+      this.$nextTick(() => this.drawConnections());
+      window.addEventListener('resize', () => {
+        if (this.page === 'dashboard') this.drawConnections();
+      });
+    },
   };
 }
 </script>
