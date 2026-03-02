@@ -1,0 +1,51 @@
+name: Deploy to VPS
+
+# Деплой запускается автоматически при пуше в main
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    name: SSH Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Подключаемся к VPS по SSH и деплоим
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}       # IP или домен VPS
+          username: ${{ secrets.VPS_USER }}   # пользователь (обычно root или ubuntu)
+          key: ${{ secrets.VPS_SSH_KEY }}     # приватный SSH ключ (содержимое ~/.ssh/id_rsa)
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            set -e
+            cd /opt/chatbot
+
+            echo "==> Pulling latest code..."
+            git pull origin main
+
+            echo "==> Rebuilding Docker image..."
+            docker compose build --no-cache chatbot
+
+            echo "==> Restarting services..."
+            docker compose up -d --force-recreate chatbot
+
+            echo "==> Checking health..."
+            sleep 5
+            curl -sf http://localhost:8000/health || exit 1
+
+            echo "==> Deploy successful!"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Как настроить GitHub Secrets (один раз):
+#
+# GitHub → репо → Settings → Secrets and variables → Actions → New repository secret
+#
+# VPS_HOST    = 123.456.789.0      (IP твоего VPS)
+# VPS_USER    = root               (или ubuntu, deploy — зависит от VPS)
+# VPS_SSH_KEY = -----BEGIN OPENSSH PRIVATE KEY-----
+#               (содержимое ~/.ssh/id_rsa с локального компа или VPS)
+# VPS_PORT    = 22                 (стандартный SSH порт)
+# ─────────────────────────────────────────────────────────────────────────────

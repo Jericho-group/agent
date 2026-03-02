@@ -1,0 +1,86 @@
+version: "3.9"
+
+# ============================================================
+# Docker Compose — полный стек на своём сервере (без Supabase)
+#
+# Запуск:
+#   docker compose up -d
+#
+# Первый запуск (создать таблицы + загрузить БД):
+#   docker compose exec chatbot python ingest_data.py
+# ============================================================
+
+services:
+
+  # ── PostgreSQL с pgvector ─────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16   # официальный образ с pgvector
+    container_name: chatbot_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: chatbot_db
+      POSTGRES_USER: chatbot_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./supabase/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql  # авто-миграция при старте
+    ports:
+      - "5432:5432"    # закрой этот порт в продакшене (оставь только внутри Docker сети)
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chatbot_user -d chatbot_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── FastAPI приложение ────────────────────────────────────
+  chatbot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: chatbot_app
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Переопределяем DB URL чтобы использовать Docker DNS (имя сервиса = postgres)
+      SUPABASE_DB_URL: postgresql://chatbot_user:${POSTGRES_PASSWORD:-changeme}@postgres:5432/chatbot_db
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data   # для логов и временных файлов
+
+  # ── Nginx reverse proxy + SSL ─────────────────────────────
+  nginx:
+    image: nginx:alpine
+    container_name: chatbot_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro        # положи сюда fullchain.pem и privkey.pem
+    depends_on:
+      - chatbot
+
+  # ── LangFuse (self-hosted observability) ─────────────────
+  # Раскомментируй если хочешь self-hosted трассировку
+  # langfuse:
+  #   image: langfuse/langfuse:latest
+  #   container_name: chatbot_langfuse
+  #   restart: unless-stopped
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     DATABASE_URL: postgresql://chatbot_user:${POSTGRES_PASSWORD:-changeme}@postgres:5432/langfuse
+  #     NEXTAUTH_SECRET: ${LANGFUSE_SECRET:-changeme_langfuse}
+  #     NEXTAUTH_URL: http://localhost:3000
+  #     SALT: ${LANGFUSE_SALT:-changeme_salt}
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+
+volumes:
+  postgres_data:
