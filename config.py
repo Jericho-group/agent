@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     company_name: str = "My Company"
     app_name: str = "MyApp"
     debug: bool = False
+    admin_token: str = "changeme"  # поменяй в .env → ADMIN_TOKEN=ваш_пароль
 
     # ── Router thresholds ─────────────────────────────────────────────────────
     # Если keyword-matching даёт confidence >= threshold → не тратим токены на LLM
