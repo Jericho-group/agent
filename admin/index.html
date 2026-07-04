@@ -5723,8 +5723,9 @@ function adminApp() {
       if (savedImp) { try { this.impersonateInfo = JSON.parse(savedImp); this.isImpersonating = true; } catch (_) {} }
       const saved = sessionStorage.getItem('adminToken');
       const savedScope = sessionStorage.getItem('adminScope');
-      if (saved && savedScope) { this.token = saved; this.scope = savedScope; this.authenticated = true; if (this.scope==='bot404') this.page='conversations'; this.theme='404'; this.loadAll(); }
-      else { try { sessionStorage.removeItem('adminToken'); sessionStorage.removeItem('adminScope'); sessionStorage.removeItem('impInfo'); } catch(e) {} }
+      const savedTenant = sessionStorage.getItem('adminTenantSlug');
+      if (saved && savedScope) { this.token = saved; this.scope = savedScope; this.tenantSlug = savedTenant || ''; this.authenticated = true; if (this.scope==='bot404') this.page='conversations'; this.theme='404'; this.loadBranding?.(); this.loadAll(); }
+      else { try { sessionStorage.removeItem('adminToken'); sessionStorage.removeItem('adminScope'); sessionStorage.removeItem('adminTenantSlug'); sessionStorage.removeItem('impInfo'); } catch(e) {} }
       this.$watch('page', p => {
         if (p === 'conversations') this.loadSessions();
         if (p === 'kb') this.loadKbDocs();
