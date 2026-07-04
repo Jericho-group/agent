@@ -767,11 +767,103 @@ async def bot404_transcript(sid: str, x_admin_token: str = Header(default="")):
 
 
 @app.get("/admin/api/bot404/leads", dependencies=[Depends(_check_bot404)])
-async def bot404_leads(x_admin_token: str = Header(default="")):
+async def bot404_leads(x_admin_token: str = Header(default=""), status: str | None = None, search: str | None = None):
+    """Список лидов тенанта с обогащением из session_facts (industry/чек/volume)."""
     pool = await _b404_pool()
     tid = await _tenant_id_from_token(x_admin_token)
-    rows = await pool.fetch("SELECT id, session_id, name, phone, email, telegram, company, note, created_at FROM bot_404_leads WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 200", tid)
+    where = ["l.tenant_id=$1"]
+    params: list = [tid]
+    if status:
+        params.append(status)
+        where.append(f"l.status = ${len(params)}")
+    if search:
+        params.append(f"%{search}%")
+        idx = len(params)
+        where.append(f"(l.name ILIKE ${idx} OR l.phone ILIKE ${idx} OR l.email ILIKE ${idx} OR l.telegram ILIKE ${idx} OR l.company ILIKE ${idx})")
+    rows = await pool.fetch(
+        f"""SELECT l.id, l.session_id, l.name, l.phone, l.email, l.telegram, l.company, l.note,
+                   l.created_at, l.updated_at, l.status,
+                   COALESCE(l.industry, f.industry) AS industry,
+                   COALESCE(l.avg_check_rub, f.avg_check_rub) AS avg_check_rub,
+                   l.manager_notes,
+                   f.volume_per_day, f.product_interest, f.current_crm,
+                   CASE
+                     WHEN l.session_id LIKE 'tg:%%' THEN 'telegram'
+                     ELSE 'widget'
+                   END AS channel
+              FROM bot_404_leads l
+              LEFT JOIN bot_404_session_facts f ON f.session_id = l.session_id
+             WHERE {" AND ".join(where)}
+             ORDER BY l.updated_at DESC NULLS LAST, l.created_at DESC
+             LIMIT 500""",
+        *params,
+    )
     return {"leads": [dict(r) for r in rows]}
+
+
+class _LeadPatch(BaseModel):
+    status: str | None = None
+    manager_notes: str | None = None
+    industry: str | None = None
+    avg_check_rub: float | None = None
+
+
+@app.patch("/admin/api/bot404/leads/{lead_id}", dependencies=[Depends(_check_bot404)])
+async def bot404_lead_patch(lead_id: int, req: _LeadPatch, x_admin_token: str = Header(default="")):
+    pool = await _b404_pool()
+    tid = await _tenant_id_from_token(x_admin_token)
+    updates = []
+    params: list = []
+    if req.status is not None:
+        if req.status not in ("new", "in_work", "called", "pilot", "client", "refused"):
+            raise HTTPException(400, "invalid status")
+        params.append(req.status); updates.append(f"status = ${len(params)}")
+    if req.manager_notes is not None:
+        params.append(req.manager_notes); updates.append(f"manager_notes = ${len(params)}")
+    if req.industry is not None:
+        params.append(req.industry); updates.append(f"industry = ${len(params)}")
+    if req.avg_check_rub is not None:
+        params.append(req.avg_check_rub); updates.append(f"avg_check_rub = ${len(params)}")
+    if not updates:
+        raise HTTPException(400, "nothing to update")
+    updates.append("updated_at = now()")
+    params.append(lead_id); params.append(tid)
+    q = f"UPDATE bot_404_leads SET {', '.join(updates)} WHERE id = ${len(params)-1} AND tenant_id = ${len(params)} RETURNING id, status, manager_notes, updated_at"
+    row = await pool.fetchrow(q, *params)
+    if not row:
+        raise HTTPException(404, "lead not found or not owned")
+    return dict(row)
+
+
+@app.get("/admin/api/bot404/leads/{lead_id}", dependencies=[Depends(_check_bot404)])
+async def bot404_lead_detail(lead_id: int, x_admin_token: str = Header(default="")):
+    """Детали лида + связанный диалог (последние 30 сообщений)."""
+    pool = await _b404_pool()
+    tid = await _tenant_id_from_token(x_admin_token)
+    lead = await pool.fetchrow(
+        """SELECT l.*, f.industry AS fact_industry, f.volume_per_day, f.avg_check_rub AS fact_avg_check,
+                  f.product_interest, f.current_crm, f.mentioned_pains, f.last_summary
+             FROM bot_404_leads l
+             LEFT JOIN bot_404_session_facts f ON f.session_id = l.session_id
+            WHERE l.id=$1 AND l.tenant_id=$2""",
+        lead_id, tid,
+    )
+    if not lead:
+        raise HTTPException(404, "not found")
+    messages = await pool.fetch(
+        "SELECT direction, text, created_at FROM bot_404_log WHERE session_id=$1 AND tenant_id=$2 ORDER BY id DESC LIMIT 30",
+        lead["session_id"], tid,
+    )
+    return {"lead": dict(lead), "messages": [dict(m) for m in reversed(messages)]}
+
+
+@app.get("/admin/api/bot404/leads/stats", dependencies=[Depends(_check_bot404)])
+async def bot404_leads_stats(x_admin_token: str = Header(default="")):
+    """Счётчики по статусам для табов/бейджей."""
+    pool = await _b404_pool()
+    tid = await _tenant_id_from_token(x_admin_token)
+    rows = await pool.fetch("SELECT status, count(*)::int AS n FROM bot_404_leads WHERE tenant_id=$1 GROUP BY status", tid)
+    return {"by_status": {r["status"]: r["n"] for r in rows}}
 
 @app.get("/admin/api/bot404/stats", dependencies=[Depends(_check_bot404)])
 async def bot404_stats(x_admin_token: str = Header(default="")):

@@ -1542,6 +1542,7 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
           <symbol id="ic-audit" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></symbol>
           <symbol id="ic-team" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
           <symbol id="ic-partners" viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></symbol>
+          <symbol id="ic-leads" viewBox="0 0 24 24"><path d="M20 7h-3V5a2 2 0 0 0-2-2H9a2 2 0 0 0-2 2v2H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V8a1 1 0 0 0-1-1zM9 5h6v2H9V5z"/></symbol>
         </defs>
       </svg>
       <template x-for="item in navItems" :key="item.id">
@@ -2758,6 +2759,162 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
         </div>
       </div>
 
+      <!-- ══ LEADS ══════════════════════════════════════════════════════════ -->
+      <div x-show="page==='leads'" x-init="if(authenticated)loadLeads()" class="p-6 flex flex-col" style="height:calc(100vh - 100px)">
+        <!-- Табы статусов + поиск -->
+        <div class="flex items-center gap-3 mb-4 flex-wrap">
+          <template x-for="tab in leadTabs" :key="tab.key">
+            <button @click="leadFilter=tab.key; loadLeads()"
+                    :style="leadFilter===tab.key ? 'background:#0B8A5B;color:#fff;font-weight:600;' : 'background:#F4F6F4;color:#5A5A60;'"
+                    class="text-[12.5px] px-3 py-1.5 rounded-full transition flex items-center gap-1.5">
+              <span x-text="tab.icon"></span>
+              <span x-text="tab.label"></span>
+              <span x-show="leadStats[tab.key]" class="ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold"
+                    :style="leadFilter===tab.key?'background:rgba(255,255,255,0.25);color:#fff;':'background:rgba(0,0,0,0.05);color:#5A5A60;'"
+                    x-text="leadStats[tab.key]"></span>
+            </button>
+          </template>
+          <div class="flex-1"></div>
+          <input type="text" placeholder="Поиск: имя, телефон, email, @tg…" x-model="leadSearch" @input.debounce.400ms="loadLeads()"
+                 class="border border-slate-200 rounded-lg px-3 py-1.5 text-[12.5px] focus:outline-none focus:ring-2 focus:ring-indigo-400 w-72">
+          <button @click="csvDownload('leads')" title="Скачать CSV"
+                  class="text-[12px] px-3 py-1.5 rounded-lg" style="background:#F4F6F4;color:#5A5A60;">⬇ CSV</button>
+        </div>
+
+        <!-- Таблица + боковая панель -->
+        <div class="flex-1 min-h-0 grid gap-4" :style="selectedLeadId ? 'grid-template-columns: 1fr 420px;' : 'grid-template-columns: 1fr;'">
+          <!-- Таблица -->
+          <div class="bg-white rounded-2xl border border-slate-100 overflow-hidden flex flex-col min-h-0">
+            <div class="p-3 border-b border-slate-100 flex items-center justify-between">
+              <div class="text-[13px] font-semibold text-slate-700">Лидов: <span x-text="leads.length"></span></div>
+              <div x-show="leadLoading" class="text-[11px] text-slate-400">загружаю…</div>
+            </div>
+            <div class="flex-1 overflow-auto">
+              <table class="w-full text-[12.5px]">
+                <thead class="sticky top-0 bg-slate-50 text-slate-500 text-[11px] uppercase tracking-wider">
+                  <tr>
+                    <th class="text-left px-3 py-2 font-semibold">Клиент</th>
+                    <th class="text-left px-3 py-2 font-semibold">Контакт</th>
+                    <th class="text-left px-3 py-2 font-semibold">Канал</th>
+                    <th class="text-left px-3 py-2 font-semibold">Отрасль</th>
+                    <th class="text-right px-3 py-2 font-semibold">Средний чек</th>
+                    <th class="text-left px-3 py-2 font-semibold">Дата</th>
+                    <th class="text-left px-3 py-2 font-semibold">Статус</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template x-for="l in leads" :key="l.id">
+                    <tr @click="openLead(l.id)"
+                        :style="selectedLeadId===l.id?'background:#E3F5ED;':''"
+                        class="border-b border-slate-50 hover:bg-slate-50 cursor-pointer transition">
+                      <td class="px-3 py-2.5 font-semibold" style="color:#1A1A1A;">
+                        <span x-text="l.name || l.company || '(без имени)'"></span>
+                      </td>
+                      <td class="px-3 py-2.5 text-slate-600 font-mono text-[11.5px]">
+                        <span x-text="l.telegram || l.email || l.phone || '—'"></span>
+                      </td>
+                      <td class="px-3 py-2.5">
+                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-medium"
+                              :style="l.channel==='telegram'?'background:#E1F0FB;color:#0088CC;':'background:#F1EFFF;color:#3D2F8E;'"
+                              x-text="l.channel==='telegram'?'✈️ TG':'💬 Виджет'"></span>
+                      </td>
+                      <td class="px-3 py-2.5 text-slate-600" x-text="l.industry || '—'"></td>
+                      <td class="px-3 py-2.5 text-right text-slate-800" x-text="l.avg_check_rub ? Number(l.avg_check_rub).toLocaleString('ru-RU') + ' ₽' : '—'"></td>
+                      <td class="px-3 py-2.5 text-slate-500 text-[11.5px]" x-text="l.created_at ? new Date(l.created_at).toLocaleDateString('ru-RU',{day:'2-digit',month:'short'}) : ''"></td>
+                      <td class="px-3 py-2.5">
+                        <div class="relative inline-block" @click.stop>
+                          <button @click="statusMenuOpen = statusMenuOpen===l.id ? null : l.id"
+                                  class="px-2 py-0.5 rounded-full text-[11px] font-semibold flex items-center gap-1"
+                                  :style="statusStyle(l.status)">
+                            <span x-text="statusIcon(l.status)"></span>
+                            <span x-text="statusLabel(l.status)"></span>
+                          </button>
+                          <div x-show="statusMenuOpen===l.id" @click.away="statusMenuOpen=null" x-transition
+                               class="absolute right-0 mt-1 bg-white rounded-lg shadow-xl border border-slate-100 z-10 min-w-[140px]">
+                            <template x-for="st in leadStatuses" :key="st.key">
+                              <button @click="patchLead(l.id, {status: st.key}); statusMenuOpen=null"
+                                      class="w-full text-left px-3 py-1.5 text-[12px] hover:bg-slate-50 flex items-center gap-2">
+                                <span x-text="st.icon"></span>
+                                <span x-text="st.label"></span>
+                              </button>
+                            </template>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  </template>
+                  <tr x-show="leads.length===0 && !leadLoading">
+                    <td colspan="7" class="px-3 py-12 text-center text-slate-400 text-[13px]">
+                      Лидов пока нет — как только клиент оставит контакт в виджете или TG, он попадёт сюда
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Боковая панель деталей -->
+          <div x-show="selectedLeadId" x-cloak class="bg-white rounded-2xl border border-slate-100 flex flex-col min-h-0 overflow-hidden">
+            <div class="p-4 border-b border-slate-100 flex items-center justify-between">
+              <div class="font-semibold text-slate-800">Детали лида</div>
+              <button @click="selectedLeadId=null; leadDetail=null" class="text-slate-400 hover:text-slate-600">✕</button>
+            </div>
+            <div class="flex-1 overflow-auto p-4 space-y-4" x-show="leadDetail">
+              <!-- Профиль -->
+              <div>
+                <div class="text-[11px] uppercase tracking-wider text-slate-400 mb-1">Клиент</div>
+                <div class="font-bold text-[16px]" x-text="leadDetail?.lead?.name || leadDetail?.lead?.company || '(без имени)'"></div>
+                <div class="text-[12px] text-slate-500 mt-0.5">
+                  <span x-show="leadDetail?.lead?.phone" x-text="'📞 ' + leadDetail?.lead?.phone"></span>
+                  <span x-show="leadDetail?.lead?.email" x-text="' ✉️ ' + leadDetail?.lead?.email"></span>
+                  <span x-show="leadDetail?.lead?.telegram" x-text="' ✈️ ' + leadDetail?.lead?.telegram"></span>
+                </div>
+              </div>
+
+              <!-- Факты из session_facts -->
+              <div class="border-t border-slate-100 pt-3">
+                <div class="text-[11px] uppercase tracking-wider text-slate-400 mb-1">Что знаем о клиенте</div>
+                <div class="grid grid-cols-2 gap-2 text-[12px]">
+                  <div><span class="text-slate-500">Отрасль:</span> <b x-text="leadDetail?.lead?.fact_industry || leadDetail?.lead?.industry || '—'"></b></div>
+                  <div><span class="text-slate-500">Объём/день:</span> <b x-text="leadDetail?.lead?.volume_per_day || '—'"></b></div>
+                  <div><span class="text-slate-500">Средний чек:</span> <b x-text="(leadDetail?.lead?.fact_avg_check || leadDetail?.lead?.avg_check_rub) ? Number(leadDetail?.lead?.fact_avg_check || leadDetail?.lead?.avg_check_rub).toLocaleString('ru-RU') + ' ₽' : '—'"></b></div>
+                  <div><span class="text-slate-500">CRM:</span> <b x-text="leadDetail?.lead?.current_crm || '—'"></b></div>
+                  <div class="col-span-2" x-show="leadDetail?.lead?.product_interest"><span class="text-slate-500">Интерес:</span> <b x-text="leadDetail?.lead?.product_interest"></b></div>
+                </div>
+                <div x-show="leadDetail?.lead?.last_summary" class="text-[12px] text-slate-600 italic mt-2" x-text="'«' + leadDetail?.lead?.last_summary + '»'"></div>
+              </div>
+
+              <!-- Заметки менеджера -->
+              <div class="border-t border-slate-100 pt-3">
+                <div class="text-[11px] uppercase tracking-wider text-slate-400 mb-1">Заметки менеджера</div>
+                <textarea x-model="leadNoteDraft" @change="saveLeadNote()" rows="3"
+                          placeholder="Заметки для команды (комментарии, договорённости, обратная связь)…"
+                          class="w-full border border-slate-200 rounded-lg px-3 py-2 text-[12.5px] focus:outline-none focus:ring-2 focus:ring-indigo-400"></textarea>
+              </div>
+
+              <!-- Диалог -->
+              <div class="border-t border-slate-100 pt-3">
+                <div class="text-[11px] uppercase tracking-wider text-slate-400 mb-2 flex items-center justify-between">
+                  <span>Последние сообщения</span>
+                  <button @click="page='conversations'; loadSession(leadDetail?.lead?.session_id)"
+                          class="text-[10px] text-indigo-600 hover:underline">открыть чат →</button>
+                </div>
+                <div class="space-y-1.5 max-h-64 overflow-auto">
+                  <template x-for="m in (leadDetail?.messages || [])" :key="m.created_at">
+                    <div class="text-[12px]" :style="m.direction==='in'?'text-align:left':'text-align:right'">
+                      <div class="inline-block max-w-[80%] p-2 rounded-lg"
+                           :style="m.direction==='in'?'background:#F4F6F4;color:#1A1A1A;':'background:#E3F5ED;color:#085041;'">
+                        <span x-text="m.text"></span>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- ══ PARTNERS ════════════════════════════════════════════════════════ -->
       <div x-show="page==='partners'" x-init="loadPartners()" class="p-6 flex flex-col" style="height:calc(100vh - 100px)">
         <!-- KPI шапка -->
@@ -3959,6 +4116,7 @@ function adminApp() {
       { id:'agents',        label:'Агенты',          icon:'🤖' },
       { id:'kb',            label:'База знаний',     icon:'📚' },
       { id:'conversations', label:'Диалоги',         icon:'💬' },
+      { id:'leads',         label:'Лиды',            icon:'💼' },
       { id:'partners',      label:'Партнёры',        icon:'🤝' },
       { id:'proactive',     label:'Проактивность',   icon:'🚀' },
       { id:'widget',        label:'Виджет',          icon:'🔧' },
@@ -4424,6 +4582,26 @@ function adminApp() {
 
     // KB viewer state
     kbDocs: [], kbLoading: false, kbSearch: '', kbCatFilter: '', kbExpanded: null,
+    // Лиды
+    leads: [], leadStats: {}, leadLoading: false, leadFilter: 'all', leadSearch: '',
+    selectedLeadId: null, leadDetail: null, leadNoteDraft: '', statusMenuOpen: null,
+    leadTabs: [
+      { key: 'all',      icon: '📋', label: 'Все' },
+      { key: 'new',      icon: '🆕', label: 'Новые' },
+      { key: 'in_work',  icon: '🔄', label: 'В работе' },
+      { key: 'called',   icon: '📞', label: 'Дозвонились' },
+      { key: 'pilot',    icon: '🚀', label: 'Пилот' },
+      { key: 'client',   icon: '✅', label: 'Клиенты' },
+      { key: 'refused',  icon: '❌', label: 'Отказ' },
+    ],
+    leadStatuses: [
+      { key: 'new',      icon: '🆕', label: 'Новый' },
+      { key: 'in_work',  icon: '🔄', label: 'В работе' },
+      { key: 'called',   icon: '📞', label: 'Дозвонились' },
+      { key: 'pilot',    icon: '🚀', label: 'Пилот' },
+      { key: 'client',   icon: '✅', label: 'Клиент' },
+      { key: 'refused',  icon: '❌', label: 'Отказ' },
+    ],
     tenantSlug: '', brandBotName: '', brandName: '', brandRoleSubtitle: '',
 
     kbCategories: [
@@ -5197,6 +5375,76 @@ function adminApp() {
         this.brandRoleSubtitle = b.role_subtitle || '';
       } catch(e) {}
     },
+    // ═════ Лиды: методы ═════
+    statusStyle(s) {
+      const m = {
+        new:     'background:#E1F0FB;color:#0088CC;',
+        in_work: 'background:#FEF3E0;color:#7A4A0E;',
+        called:  'background:#F1EFFF;color:#3D2F8E;',
+        pilot:   'background:#FFF4E0;color:#7A5A1A;',
+        client:  'background:#E3F5ED;color:#085041;',
+        refused: 'background:#FDE7E7;color:#8B1F1F;',
+      };
+      return m[s] || 'background:#F4F6F4;color:#5A5A60;';
+    },
+    statusIcon(s)  { return ({new:'🆕', in_work:'🔄', called:'📞', pilot:'🚀', client:'✅', refused:'❌'})[s] || '⚪'; },
+    statusLabel(s) { return ({new:'Новый', in_work:'В работе', called:'Дозвонились', pilot:'Пилот', client:'Клиент', refused:'Отказ'})[s] || s; },
+    async loadLeads() {
+      this.leadLoading = true;
+      try {
+        // Параллельно грузим счётчики
+        const statsR = await fetch('/admin/api/bot404/leads/stats', { headers: this.h() });
+        if (statsR.ok) {
+          const s = await statsR.json();
+          const by = s.by_status || {};
+          this.leadStats = { all: Object.values(by).reduce((a,b)=>a+b,0), ...by };
+        }
+        const params = new URLSearchParams();
+        if (this.leadFilter && this.leadFilter !== 'all') params.set('status', this.leadFilter);
+        if (this.leadSearch) params.set('search', this.leadSearch);
+        const r = await fetch('/admin/api/bot404/leads?' + params, { headers: this.h() });
+        if (r.ok) {
+          const d = await r.json();
+          this.leads = d.leads || [];
+        }
+      } catch(e) { console.warn('[leads]', e); }
+      finally { this.leadLoading = false; }
+    },
+    async openLead(id) {
+      this.selectedLeadId = id;
+      this.leadDetail = null;
+      this.leadNoteDraft = '';
+      try {
+        const r = await fetch('/admin/api/bot404/leads/' + id, { headers: this.h() });
+        if (r.ok) {
+          this.leadDetail = await r.json();
+          this.leadNoteDraft = this.leadDetail?.lead?.manager_notes || '';
+        }
+      } catch(e) { console.warn('[lead open]', e); }
+    },
+    async patchLead(id, patch) {
+      try {
+        const r = await fetch('/admin/api/bot404/leads/' + id, {
+          method: 'PATCH',
+          headers: Object.assign({}, this.h(), { 'Content-Type': 'application/json' }),
+          body: JSON.stringify(patch),
+        });
+        if (r.ok) {
+          // локально обновим статус в текущем списке
+          const upd = await r.json();
+          const l = this.leads.find(x => x.id === id);
+          if (l && patch.status) l.status = upd.status;
+          if (this.leadDetail?.lead?.id === id && patch.status) this.leadDetail.lead.status = upd.status;
+          // обновим счётчики
+          this.loadLeads();
+        }
+      } catch(e) { console.warn('[patch lead]', e); }
+    },
+    saveLeadNote() {
+      if (!this.selectedLeadId) return;
+      this.patchLead(this.selectedLeadId, { manager_notes: this.leadNoteDraft });
+    },
+
     async loadKbDocs() {
       this.kbLoading = true;
       try {
@@ -5480,6 +5728,7 @@ function adminApp() {
       this.$watch('page', p => {
         if (p === 'conversations') this.loadSessions();
         if (p === 'kb') this.loadKbDocs();
+        if (p === 'leads') this.loadLeads();
         if (p === 'dashboard') this.$nextTick(() => requestAnimationFrame(() => requestAnimationFrame(() => this.drawConnections())));
         if (p === 'proactive') { this.proLoadAccounts(); this.proLoadCampaigns(); this.proLoadConversations(); }
         // Phase 3.5–12: перезагружать разделы при заходе на них
