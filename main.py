@@ -18,7 +18,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -315,22 +315,79 @@ async def ingest_knowledge(req: IngestRequest):
     }
 
 
+_STARTED_AT = None  # заполнится на первом обращении к /health
+
+
 @app.get("/health")
-async def health():
-    """Проверка состояния системы."""
-    store = VectorStore()
-    sessions = await _memory.get_all_sessions()
-    return {
-        "status": "ok",
-        "knowledge_base_docs": store.count(),
-        "active_sessions": len(sessions),
-        "company": settings.company_name,
-        "models": {
-            "router": settings.router_model,
-            "agent": settings.agent_model,
-            "orchestrator": settings.orchestrator_model,
-        },
-    }
+async def health(deep: bool = False):
+    """
+    Быстрый health-check для uptime-мониторинга.
+    ?deep=1 — расширенный (БД, Redis, KB, тенанты). Возвращает 503 при сбое.
+    """
+    import datetime as _dtmod, time as _time
+    global _STARTED_AT
+    if _STARTED_AT is None:
+        _STARTED_AT = _dtmod.datetime.utcnow()
+
+    result = {"status": "ok", "ts": _dtmod.datetime.utcnow().isoformat() + "Z"}
+    checks = {}
+    problems = []
+
+    # 1) БД — быстрый SELECT 1
+    try:
+        t0 = _time.perf_counter()
+        pool = await _b404_pool()
+        async with pool.acquire() as con:
+            await con.fetchval("SELECT 1")
+        checks["db"] = {"ok": True, "ms": round((_time.perf_counter() - t0) * 1000, 1)}
+    except Exception as e:
+        checks["db"] = {"ok": False, "error": str(e)[:200]}
+        problems.append("db")
+
+    # 2) Redis — ping
+    try:
+        t0 = _time.perf_counter()
+        r = await _get_redis()
+        if r:
+            await r.ping()
+            checks["redis"] = {"ok": True, "ms": round((_time.perf_counter() - t0) * 1000, 1)}
+        else:
+            checks["redis"] = {"ok": False, "error": "client not initialised"}
+            problems.append("redis")
+    except Exception as e:
+        checks["redis"] = {"ok": False, "error": str(e)[:200]}
+        problems.append("redis")
+
+    result["checks"] = checks
+    result["uptime_s"] = int((_dtmod.datetime.utcnow() - _STARTED_AT).total_seconds())
+
+    if deep:
+        try:
+            store = VectorStore()
+            sessions = await _memory.get_all_sessions()
+            result["knowledge_base_docs"] = store.count()
+            result["active_sessions"] = len(sessions)
+            result["company"] = settings.company_name
+            result["models"] = {
+                "router": settings.router_model,
+                "agent": settings.agent_model,
+                "orchestrator": settings.orchestrator_model,
+            }
+            # число тенантов
+            try:
+                pool = await _b404_pool()
+                async with pool.acquire() as con:
+                    result["tenants"] = await con.fetchval("SELECT COUNT(*) FROM tenants WHERE is_active=true")
+            except Exception:
+                pass
+        except Exception as e:
+            result["deep_error"] = str(e)[:200]
+
+    if problems:
+        result["status"] = "degraded"
+        # 503 — чтобы uptime-мониторинг сработал
+        return JSONResponse(content=result, status_code=503)
+    return result
 
 
 # ── Admin Panel ──────────────────────────────────────────────────────────────

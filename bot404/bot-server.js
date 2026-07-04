@@ -254,6 +254,36 @@ app.use((req, res, next) => {
   next();
 });
 
+// ── /health для uptime-мониторинга ────────────────────────────────────────────
+const _STARTED_AT = Date.now();
+app.get('/health', async (req, res) => {
+  const deep = req.query.deep === '1' || req.query.deep === 'true';
+  const out = { status: 'ok', ts: new Date().toISOString(), uptime_s: Math.floor((Date.now() - _STARTED_AT) / 1000) };
+  const checks = {};
+  const problems = [];
+
+  // 1) БД — pool из scope модуля (см. `const pool = new pg.Pool()` в топе файла)
+  try {
+    const t0 = Date.now();
+    await pool.query('SELECT 1');
+    checks.db = { ok: true, ms: Date.now() - t0 };
+  } catch (e) {
+    checks.db = { ok: false, error: String(e.message || e).slice(0, 200) };
+    problems.push('db');
+  }
+
+  out.checks = checks;
+  if (deep) {
+    out.node = process.version;
+    out.memory_mb = Math.round(process.memoryUsage().rss / 1024 / 1024);
+  }
+  if (problems.length) {
+    out.status = 'degraded';
+    return res.status(503).json(out);
+  }
+  return res.json(out);
+});
+
 // ── Multi-tenant: resolveTenant middleware ────────────────────────────────────
 // Поддомен → tenant_id. Кэш в памяти на 60 сек чтобы не дёргать БД на каждый запрос.
 const TENANT_CACHE = new Map();
@@ -264,8 +294,11 @@ const TENANT_TTL_MS = 60_000;
 const HOST_SLUG_FIXED = {
   'bot.217-149-25-34.sslip.io': 'aisha',
   '217-149-25-34.sslip.io':     'orchestra',
+  'admin.dirizher404.ru':       'orchestra',
+  'bot.dirizher404.ru':         'aisha',
+  'dirizher404.ru':             'orchestra',
 };
-const SUBDOMAIN_RX = /^([a-z0-9][a-z0-9-]{0,40})\.(?:404ai\.ru|217-149-25-34\.sslip\.io)$/i;
+const SUBDOMAIN_RX = /^([a-z0-9][a-z0-9-]{0,40})\.(?:404ai\.ru|dirizher404\.ru|217-149-25-34\.sslip\.io)$/i;
 
 function extractSlug(host, headerOverride) {
   // X-Tenant-Slug — для локальных тестов и e2e (приоритетнее host)
