@@ -1776,11 +1776,13 @@ app.get('/api/admin/bot404/kb', (req, res) => {
 app.get('/admin', (req, res) => { res.type('text/html; charset=utf-8').send(readFileSync('/app/admin.html')); });
 app.get('/', (req, res) => res.type('text/plain').send('404ai bot server ok'));
 
-// Sentry: express error handler — регистрируется ПОСЛЕ всех роутов
+// Sentry v7: express error handler — регистрируется ПОСЛЕ всех роутов
 if (process.env.SENTRY_DSN) {
   try {
     const Sentry = await import('@sentry/node');
-    Sentry.setupExpressErrorHandler(app);
+    if (Sentry.Handlers && Sentry.Handlers.errorHandler) {
+      app.use(Sentry.Handlers.errorHandler());
+    }
   } catch (e) { /* уже залогировано выше */ }
 }
 
