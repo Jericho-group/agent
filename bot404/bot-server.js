@@ -1,3 +1,19 @@
+// Sentry / GlitchTip error tracking (init ДО остальных импортов, иначе не поймает раннюю ошибку)
+if (process.env.SENTRY_DSN) {
+  try {
+    const Sentry = await import('@sentry/node');
+    Sentry.init({
+      dsn: process.env.SENTRY_DSN,
+      environment: process.env.SENTRY_ENV || 'prod',
+      tracesSampleRate: 0.0,
+      sendDefaultPii: false,
+    });
+    console.log('[sentry] initialised env=' + (process.env.SENTRY_ENV || 'prod'));
+  } catch (e) {
+    console.error('[sentry] init failed:', e.message);
+  }
+}
+
 import express from 'express';
 import pg from 'pg';
 import Redis from 'ioredis';
@@ -1759,6 +1775,14 @@ app.get('/api/admin/bot404/kb', (req, res) => {
 
 app.get('/admin', (req, res) => { res.type('text/html; charset=utf-8').send(readFileSync('/app/admin.html')); });
 app.get('/', (req, res) => res.type('text/plain').send('404ai bot server ok'));
+
+// Sentry: express error handler — регистрируется ПОСЛЕ всех роутов
+if (process.env.SENTRY_DSN) {
+  try {
+    const Sentry = await import('@sentry/node');
+    Sentry.setupExpressErrorHandler(app);
+  } catch (e) { /* уже залогировано выше */ }
+}
 
 app.listen(PORT, () => {
   console.log('[bot404] listening on ' + PORT);

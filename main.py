@@ -53,6 +53,24 @@ async def lifespan(app: FastAPI):
     yield
 
 
+# Sentry / GlitchTip error tracking — включается через SENTRY_DSN env
+_SENTRY_DSN = os.environ.get("SENTRY_DSN", "").strip()
+if _SENTRY_DSN:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+        from sentry_sdk.integrations.asyncpg import AsyncPGIntegration
+        sentry_sdk.init(
+            dsn=_SENTRY_DSN,
+            environment=os.environ.get("SENTRY_ENV", "prod"),
+            traces_sample_rate=0.0,
+            send_default_pii=False,
+            integrations=[FastApiIntegration(), AsyncPGIntegration()],
+        )
+        print(f"[sentry] initialised env={os.environ.get('SENTRY_ENV','prod')}")
+    except Exception as _e:
+        print(f"[sentry] init failed: {_e}")
+
 app = FastAPI(
     title=f"{settings.company_name} Chatbot API",
     description="AI чат-бот на базе CrewAI с RAG и памятью диалогов",
