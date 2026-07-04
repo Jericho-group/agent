@@ -4682,6 +4682,18 @@ function adminApp() {
     // Test chat
     testMessages: [], testSessionId: null, chatInput: '', chatSending: false,
 
+    // Сбрасываем всё, что относится к предыдущей сессии/тенанту при смене auth
+    _resetTestChat() {
+      this.testMessages = [];
+      this.testSessionId = null;
+      this.chatInput = '';
+      this.chatSending = false;
+      this.traceLog = [];
+      this.traceRouterLabel = '';
+      Object.keys(this.flowState).forEach(k => { this.flowState[k] = 'idle'; });
+      this.$nextTick(() => requestAnimationFrame(() => requestAnimationFrame(() => this.drawConnections?.())));
+    },
+
     // CSS class helper for nodes
     fn(node, color) {
       const s = this.flowState[node];
@@ -5045,6 +5057,7 @@ function adminApp() {
         const r = await fetch('/admin/api/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ login: this.loginName, password: this.password }) });
         if (r.ok) {
           const d = await r.json();
+          this._resetTestChat();
           this.token = d.token; this.scope = d.scope || 'full'; this.loginName = d.login || this.loginName;
           this.tenantSlug = d.tenant_slug || '';
           this.authenticated = true;
@@ -5060,9 +5073,11 @@ function adminApp() {
     },
 
     logout() {
+      this._resetTestChat();
       this.authenticated = false; this.token = ''; this.password = ''; this.loginName = ''; this.scope = 'full'; this.page = 'dashboard'; this.theme = '404';
+      this.tenantSlug = ''; this.brandBotName = ''; this.brandName = ''; this.brandRoleSubtitle = '';
       this.isImpersonating = false; this.impersonateInfo = null;
-      try { sessionStorage.removeItem('adminToken'); sessionStorage.removeItem('adminScope'); sessionStorage.removeItem('impInfo'); } catch(e) {}
+      try { sessionStorage.removeItem('adminToken'); sessionStorage.removeItem('adminScope'); sessionStorage.removeItem('adminTenantSlug'); sessionStorage.removeItem('impInfo'); } catch(e) {}
     },
     async loadAll() {
       if (this.scope === 'bot404') {
@@ -5695,12 +5710,16 @@ function adminApp() {
         });
         if (lr.ok) {
           const ld = await lr.json();
+          this._resetTestChat();
           this.token = ld.token; this.scope = ld.scope; this.loginName = '404ai';
+          // impersonate: смотрим глазами target_slug, а не своими
+          this.tenantSlug = d.target_slug || ld.tenant_slug || '';
           this.authenticated = true;
           this.isImpersonating = true;
           this.impersonateInfo = { target_slug: d.target_slug, root_email: d.root_email };
           sessionStorage.setItem('adminToken', this.token);
           sessionStorage.setItem('adminScope', this.scope);
+          sessionStorage.setItem('adminTenantSlug', this.tenantSlug);
           sessionStorage.setItem('impInfo', JSON.stringify(this.impersonateInfo));
           if (this.scope === 'bot404') this.page = 'conversations';
           this.theme = '404';
