@@ -23,6 +23,7 @@ jobs:
 
           # Копирую chatbot_project (кроме .env, vendor, .git)
           rsync -az --delete \
+                --filter='protect .env' --filter='protect .env.*' \
                 --exclude='.env' --exclude='.env.*' --exclude='vendor/' \
                 --exclude='.git/' --exclude='__pycache__/' --exclude='data/' \
                 --exclude='bot404/' \
@@ -30,6 +31,7 @@ jobs:
 
           # Копирую bot404 отдельно
           rsync -az --delete \
+                --filter='protect .env' \
                 --exclude='.env' --exclude='.git/' --exclude='node_modules/' \
                 bot404/ "$HOST":/root/bot404/
 
