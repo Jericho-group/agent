@@ -835,6 +835,15 @@ async def bot404_lead_patch(lead_id: int, req: _LeadPatch, x_admin_token: str = 
     return dict(row)
 
 
+@app.get("/admin/api/bot404/leads/stats", dependencies=[Depends(_check_bot404)])
+async def bot404_leads_stats(x_admin_token: str = Header(default="")):
+    """Счётчики по статусам для табов/бейджей. Регистрируется ДО /{lead_id} чтобы не поглощался path-параметром."""
+    pool = await _b404_pool()
+    tid = await _tenant_id_from_token(x_admin_token)
+    rows = await pool.fetch("SELECT status, count(*)::int AS n FROM bot_404_leads WHERE tenant_id=$1 GROUP BY status", tid)
+    return {"by_status": {r["status"]: r["n"] for r in rows}}
+
+
 @app.get("/admin/api/bot404/leads/{lead_id}", dependencies=[Depends(_check_bot404)])
 async def bot404_lead_detail(lead_id: int, x_admin_token: str = Header(default="")):
     """Детали лида + связанный диалог (последние 30 сообщений)."""
@@ -857,13 +866,6 @@ async def bot404_lead_detail(lead_id: int, x_admin_token: str = Header(default="
     return {"lead": dict(lead), "messages": [dict(m) for m in reversed(messages)]}
 
 
-@app.get("/admin/api/bot404/leads/stats", dependencies=[Depends(_check_bot404)])
-async def bot404_leads_stats(x_admin_token: str = Header(default="")):
-    """Счётчики по статусам для табов/бейджей."""
-    pool = await _b404_pool()
-    tid = await _tenant_id_from_token(x_admin_token)
-    rows = await pool.fetch("SELECT status, count(*)::int AS n FROM bot_404_leads WHERE tenant_id=$1 GROUP BY status", tid)
-    return {"by_status": {r["status"]: r["n"] for r in rows}}
 
 @app.get("/admin/api/bot404/stats", dependencies=[Depends(_check_bot404)])
 async def bot404_stats(x_admin_token: str = Header(default="")):
