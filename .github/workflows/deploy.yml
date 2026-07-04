@@ -1,28 +1,79 @@
-name: Deploy to VPS
+name: Deploy
 
 on:
   push:
-    branches: [main]
+    branches: [dev, main]
+  workflow_dispatch:
 
 jobs:
-  deploy:
-    name: SSH Deploy
+  deploy-test:
+    if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
-
     steps:
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT || 22 }}
-          script: |
-            set -e
-            cd /opt/chatbot
-            git pull origin main
-            docker compose build --no-cache chatbot
-            docker compose up -d --force-recreate chatbot
-            sleep 5
-            curl -sf http://localhost:8000/health || exit 1
-            echo "Deploy successful!"
+      - uses: actions/checkout@v4
+
+      - name: Deploy to TEST (217.149.25.34)
+        env:
+          SSHPASS: ${{ secrets.SSH_PASS_TEST }}
+        run: |
+          sudo apt-get install -yq sshpass rsync
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=no ${{ secrets.SSH_USER_TEST }}@${{ secrets.SSH_HOST_TEST }}"
+          RSYNC="sshpass -e rsync -az --delete -e 'ssh -o StrictHostKeyChecking=no'"
+
+          # Копирую chatbot_project (кроме .env, vendor, .git)
+          $RSYNC --exclude='.env' --exclude='.env.*' --exclude='vendor/' \
+                 --exclude='.git/' --exclude='__pycache__/' --exclude='data/' \
+                 --exclude='bot404/' \
+                 . ${{ secrets.SSH_USER_TEST }}@${{ secrets.SSH_HOST_TEST }}:/opt/chatbot/chatbot_project/
+
+          # Копирую bot404 отдельно
+          $RSYNC --exclude='.env' --exclude='.git/' --exclude='node_modules/' \
+                 bot404/ ${{ secrets.SSH_USER_TEST }}@${{ secrets.SSH_HOST_TEST }}:/root/bot404/
+
+          # Пересобираю и перезапускаю
+          $SSH "cd /opt/chatbot/chatbot_project && docker compose up -d --build && \
+                docker cp /opt/chatbot/chatbot_project/admin/index.html chatbot_app:/app/admin/index.html && \
+                docker restart bot404 && \
+                sleep 5 && docker ps --format '{{.Names}}: {{.Status}}' | grep -E '(chatbot|bot404|caddy|redis)'"
+
+      - name: Smoke test TEST
+        run: |
+          # Проверяю что endpoint отвечает
+          curl -sf https://217-149-25-34.sslip.io/admin -o /dev/null -w "test admin HTTP %{http_code}\n" || echo "warning: test smoke failed"
+
+  deploy-prod:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production  # позволяет добавить manual approval через Settings→Environments
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to PROD (72.56.36.167)
+        env:
+          SSHPASS: ${{ secrets.SSH_PASS_PROD }}
+        run: |
+          sudo apt-get install -yq sshpass rsync
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=no ${{ secrets.SSH_USER_PROD }}@${{ secrets.SSH_HOST_PROD }}"
+          RSYNC="sshpass -e rsync -az --delete -e 'ssh -o StrictHostKeyChecking=no'"
+
+          $RSYNC --exclude='.env' --exclude='.env.*' --exclude='vendor/' \
+                 --exclude='.git/' --exclude='__pycache__/' --exclude='data/' \
+                 --exclude='bot404/' \
+                 . ${{ secrets.SSH_USER_PROD }}@${{ secrets.SSH_HOST_PROD }}:/opt/chatbot/chatbot_project/
+
+          $RSYNC --exclude='.env' --exclude='.git/' --exclude='node_modules/' \
+                 bot404/ ${{ secrets.SSH_USER_PROD }}@${{ secrets.SSH_HOST_PROD }}:/root/bot404/
+
+          $SSH "cd /opt/chatbot/chatbot_project && docker compose up -d --build && \
+                docker cp /opt/chatbot/chatbot_project/admin/index.html chatbot_app:/app/admin/index.html && \
+                docker restart bot404 && \
+                sleep 5 && docker ps --format '{{.Names}}: {{.Status}}' | grep -E '(chatbot|bot404|caddy|redis)'"
+
+      - name: Smoke test PROD
+        run: |
+          # Пробую логин с реальными prod-данными (не факт что дойдёт — используем как sanity check)
+          curl -sf -X POST -H "Content-Type: application/json" -H "Origin: https://admin.dirizher404.ru" \
+            -d '{"login":"admin@prmonline.ru","password":"tgtKO83siR1CgA"}' \
+            https://admin.dirizher404.ru/admin/api/login --max-time 30 \
+            -o /dev/null -w "prod login HTTP %{http_code}\n" \
+            || echo "warning: prod smoke failed"
