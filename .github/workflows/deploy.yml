@@ -17,24 +17,28 @@ jobs:
           SSHPASS: ${{ secrets.SSH_PASS_TEST }}
         run: |
           sudo apt-get install -yq sshpass rsync
-          SSH="sshpass -e ssh -o StrictHostKeyChecking=no ${{ secrets.SSH_USER_TEST }}@${{ secrets.SSH_HOST_TEST }}"
-          RSYNC="sshpass -e rsync -az --delete -e 'ssh -o StrictHostKeyChecking=no'"
+          export SSHPASS
+          export RSYNC_RSH="sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+          HOST="${{ secrets.SSH_USER_TEST }}@${{ secrets.SSH_HOST_TEST }}"
 
           # Копирую chatbot_project (кроме .env, vendor, .git)
-          $RSYNC --exclude='.env' --exclude='.env.*' --exclude='vendor/' \
-                 --exclude='.git/' --exclude='__pycache__/' --exclude='data/' \
-                 --exclude='bot404/' \
-                 . ${{ secrets.SSH_USER_TEST }}@${{ secrets.SSH_HOST_TEST }}:/opt/chatbot/chatbot_project/
+          rsync -az --delete \
+                --exclude='.env' --exclude='.env.*' --exclude='vendor/' \
+                --exclude='.git/' --exclude='__pycache__/' --exclude='data/' \
+                --exclude='bot404/' \
+                . "$HOST":/opt/chatbot/chatbot_project/
 
           # Копирую bot404 отдельно
-          $RSYNC --exclude='.env' --exclude='.git/' --exclude='node_modules/' \
-                 bot404/ ${{ secrets.SSH_USER_TEST }}@${{ secrets.SSH_HOST_TEST }}:/root/bot404/
+          rsync -az --delete \
+                --exclude='.env' --exclude='.git/' --exclude='node_modules/' \
+                bot404/ "$HOST":/root/bot404/
 
           # Пересобираю и перезапускаю
-          $SSH "cd /opt/chatbot/chatbot_project && docker compose up -d --build && \
-                docker cp /opt/chatbot/chatbot_project/admin/index.html chatbot_app:/app/admin/index.html && \
-                docker restart bot404 && \
-                sleep 5 && docker ps --format '{{.Names}}: {{.Status}}' | grep -E '(chatbot|bot404|caddy|redis)'"
+          sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$HOST" \
+            "cd /opt/chatbot/chatbot_project && docker compose up -d --build && \
+             docker cp /opt/chatbot/chatbot_project/admin/index.html chatbot_app:/app/admin/index.html && \
+             docker restart bot404 && \
+             sleep 5 && docker ps --format '{{.Names}}: {{.Status}}' | grep -E '(chatbot|bot404|caddy|redis)'"
 
       - name: Smoke test TEST
         run: |
