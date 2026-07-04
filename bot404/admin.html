@@ -1,0 +1,59 @@
+<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>404ai · Аиша — ЛК</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#F6F6F7;color:#1A1A1A}
+.gate{max-width:340px;margin:120px auto;background:#fff;border:1px solid #ECECEC;border-radius:16px;padding:24px;box-shadow:0 10px 30px rgba(20,23,40,.08)}
+.gate h1{font-size:18px;margin:0 0 14px}.gate input{width:100%;padding:11px 13px;border:1px solid #E2E2E2;border-radius:10px;font-size:14px;outline:none}
+.gate button{background:#0B8A5B;color:#fff;border:0;border-radius:10px;padding:11px 16px;font-weight:600;cursor:pointer;margin-top:10px;width:100%}
+.wrap{max-width:1100px;margin:0 auto;padding:18px}
+.top{display:flex;align-items:center;gap:12px;margin-bottom:14px}.top h1{font-size:20px;margin:0;flex:1}.top .lo{font-size:13px;color:#8A8A90;cursor:pointer;background:none;border:0}
+.tabs{display:flex;gap:8px;margin-bottom:14px}.tabs button{border:1px solid #E2E2E2;background:#fff;border-radius:999px;padding:8px 16px;font-weight:600;cursor:pointer;font-size:13px}
+.tabs button.on{background:#0B8A5B;color:#fff;border-color:#0B8A5B}
+.grid{display:grid;grid-template-columns:320px 1fr;gap:14px}
+.card{background:#fff;border:1px solid #ECECEC;border-radius:14px;overflow:hidden}
+.list{max-height:640px;overflow:auto}.di{padding:11px 13px;border-bottom:1px solid #F0F0F0;cursor:pointer}.di:hover,.di.sel{background:#F6F6F7}
+.di .sid{font-size:11px;color:#8A8A90;font-family:monospace}.di .lt{font-size:13px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lead{font-size:9px;background:#E3F5ED;color:#0B8A5B;padding:1px 6px;border-radius:8px;margin-left:6px}
+.tr{padding:16px;max-height:640px;overflow:auto;display:flex;flex-direction:column;gap:8px}
+.m{padding:9px 12px;border-radius:12px;max-width:84%;font-size:14px;white-space:pre-wrap;line-height:1.45}
+.m.in{background:#0B8A5B;color:#fff;align-self:flex-end}.m.out{background:#F0F2F5;align-self:flex-start}
+.m .t{font-size:9px;opacity:.6;margin-top:3px}
+.lcard{padding:13px 16px;border-bottom:1px solid #F0F0F0}.lcard .c{font-family:monospace;font-size:13px;color:#0B8A5B;margin-right:10px}
+.mut{color:#8A8A90;font-size:13px;padding:16px}
+</style></head><body>
+<div id="gate" class="gate"><h1>404ai · Бот Аиша</h1><input id="tok" type="password" placeholder="Админ-токен" onkeydown="if(event.key==='Enter')login()"><button onclick="login()">Войти</button></div>
+<div id="app" class="wrap" style="display:none">
+  <div class="top"><h1>Бот Аиша — диалоги и лиды</h1><button class="lo" onclick="logout()">выйти</button></div>
+  <div class="tabs"><button id="td" class="on" onclick="show('d')">Диалоги</button><button id="tl" onclick="show('l')">Лиды</button></div>
+  <div id="dview" class="grid"><div class="card"><div id="dlist" class="list"></div></div><div class="card"><div id="dtr" class="tr"><div class="mut">выберите диалог слева</div></div></div></div>
+  <div id="lview" style="display:none"><div class="card" id="llist"></div></div>
+</div>
+<script>
+var T=localStorage.getItem('b404tok')||'';
+function H(){return {'X-Admin-Token':T};}
+function login(){T=document.getElementById('tok').value.trim();localStorage.setItem('b404tok',T);boot();}
+function logout(){localStorage.removeItem('b404tok');location.reload();}
+function show(v){document.getElementById('dview').style.display=v==='d'?'grid':'none';document.getElementById('lview').style.display=v==='l'?'block':'none';document.getElementById('td').className=v==='d'?'on':'';document.getElementById('tl').className=v==='l'?'on':'';if(v==='l')loadLeads();}
+function esc(s){return (s||'').replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+function fmt(d){try{return new Date(d).toLocaleString('ru-RU');}catch(e){return '';}}
+async function loadDialogs(){
+  var r=await fetch('/api/admin/bot404/dialogs',{headers:H()});if(r.status===401){logout();return;}
+  var j=await r.json();var el=document.getElementById('dlist');el.innerHTML='';
+  (j.dialogs||[]).forEach(function(d){var x=document.createElement('div');x.className='di';x.onclick=function(){openTr(d.session_id,x);};
+    x.innerHTML='<div class="sid">'+esc(d.session_id.slice(0,16))+(d.has_lead?'<span class="lead">лид</span>':'')+' &middot; '+d.msgs+'</div><div class="lt">'+esc(d.last_text||'')+'</div>';el.appendChild(x);});
+  if(!(j.dialogs||[]).length)el.innerHTML='<div class="mut">диалогов пока нет</div>';
+}
+async function openTr(sid,node){
+  [].forEach.call(document.querySelectorAll('.di'),function(n){n.classList.remove('sel');});node.classList.add('sel');
+  var tr=document.getElementById('dtr');tr.innerHTML='<div class="mut">…</div>';
+  var r=await fetch('/api/admin/bot404/transcript?sid='+encodeURIComponent(sid),{headers:H()});var j=await r.json();tr.innerHTML='';
+  (j.messages||[]).forEach(function(m){var x=document.createElement('div');x.className='m '+m.direction;x.innerHTML=esc(m.text)+'<div class="t">'+fmt(m.created_at)+'</div>';tr.appendChild(x);});
+}
+async function loadLeads(){
+  var r=await fetch('/api/admin/bot404/leads',{headers:H()});var j=await r.json();var el=document.getElementById('llist');el.innerHTML='';
+  (j.leads||[]).forEach(function(l){var x=document.createElement('div');x.className='lcard';
+    x.innerHTML=(l.name?'<b>'+esc(l.name)+'</b> ':'')+(l.phone?'<span class="c">'+esc(l.phone)+'</span>':'')+(l.email?'<span class="c">'+esc(l.email)+'</span>':'')+(l.telegram?'<span class="c">'+esc(l.telegram)+'</span>':'')+'<span style="float:right;color:#8A8A90;font-size:12px">'+fmt(l.created_at)+'</span>';el.appendChild(x);});
+  if(!(j.leads||[]).length)el.innerHTML='<div class="mut">лидов пока нет</div>';
+}
+function boot(){document.getElementById('gate').style.display='none';document.getElementById('app').style.display='block';loadDialogs();}
+if(T)boot();
+</script></body></html>

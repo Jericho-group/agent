@@ -95,3 +95,66 @@ begin
     limit match_count;
 end;
 $$;
+
+-- ============================================================
+-- Proactive Outreach Module
+-- ============================================================
+
+-- Telegram аккаунты (сессии)
+CREATE TABLE IF NOT EXISTS tg_accounts (
+    id          BIGSERIAL PRIMARY KEY,
+    phone       TEXT NOT NULL UNIQUE,
+    session_str TEXT,                          -- Telethon StringSession
+    status      TEXT NOT NULL DEFAULT 'pending', -- pending|active|banned|paused
+    daily_limit INT  NOT NULL DEFAULT 30,
+    sent_today  INT  NOT NULL DEFAULT 0,
+    last_reset  DATE NOT NULL DEFAULT CURRENT_DATE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Кампании
+CREATE TABLE IF NOT EXISTS campaigns (
+    id           BIGSERIAL PRIMARY KEY,
+    name         TEXT NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'draft', -- draft|active|paused|done
+    account_id   BIGINT REFERENCES tg_accounts(id),
+    first_message TEXT NOT NULL,               -- шаблон первого сообщения
+    goal         TEXT,                          -- цель для оркестратора
+    delay_min    INT  NOT NULL DEFAULT 60,      -- мин. задержка между сообщениями (сек)
+    delay_max    INT  NOT NULL DEFAULT 180,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Контакты кампании
+CREATE TABLE IF NOT EXISTS campaign_contacts (
+    id          BIGSERIAL PRIMARY KEY,
+    campaign_id BIGINT REFERENCES campaigns(id) ON DELETE CASCADE,
+    username    TEXT,
+    phone       TEXT,
+    name        TEXT,
+    status      TEXT NOT NULL DEFAULT 'pending', -- pending|sent|replied|converted|failed
+    session_id  TEXT UNIQUE,                     -- session_id для памяти оркестратора
+    sent_at     TIMESTAMPTZ,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Очередь отправки
+CREATE TABLE IF NOT EXISTS outreach_queue (
+    id          BIGSERIAL PRIMARY KEY,
+    contact_id  BIGINT REFERENCES campaign_contacts(id) ON DELETE CASCADE,
+    campaign_id BIGINT REFERENCES campaigns(id) ON DELETE CASCADE,
+    scheduled_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    status      TEXT NOT NULL DEFAULT 'pending', -- pending|sent|failed
+    error       TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Лог диалогов (входящие/исходящие)
+CREATE TABLE IF NOT EXISTS outreach_messages (
+    id          BIGSERIAL PRIMARY KEY,
+    contact_id  BIGINT REFERENCES campaign_contacts(id) ON DELETE CASCADE,
+    direction   TEXT NOT NULL,                   -- out|in
+    content     TEXT NOT NULL,
+    tg_msg_id   BIGINT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

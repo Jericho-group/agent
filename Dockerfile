@@ -2,17 +2,14 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Системные зависимости для psycopg2
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq-dev gcc \
-    && rm -rf /var/lib/apt/lists/*
-
-# Устанавливаем crewai из локального репозитория
-COPY ../lib/crewai /deps/crewai
-RUN pip install --no-cache-dir -e /deps/crewai
+ENV PIP_DEFAULT_TIMEOUT=120 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+ && pip install --no-cache-dir "crewai>=0.160.0"
 
 COPY . .
 

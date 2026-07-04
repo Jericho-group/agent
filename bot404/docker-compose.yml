@@ -1,0 +1,16 @@
+services:
+  bot404:
+    image: node:22-bookworm
+    container_name: bot404
+    working_dir: /app
+    volumes:
+      - ./:/app
+    env_file: .env
+    command: sh -c "npm install --omit=dev --no-audit --no-fund && node bot-server.js"
+    restart: unless-stopped
+    networks:
+      - chatnet
+networks:
+  chatnet:
+    external: true
+    name: chatbot_project_default

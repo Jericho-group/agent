@@ -1,0 +1,24 @@
+217-149-25-34.sslip.io {
+    reverse_proxy chatbot:8000 {
+        transport http {
+            read_timeout 300s
+            write_timeout 300s
+        }
+    }
+    header {
+        Access-Control-Allow-Origin "*"
+        Access-Control-Allow-Methods "GET, POST, DELETE, OPTIONS"
+        Access-Control-Allow-Headers "Content-Type, X-Admin-Token"
+    }
+    encode gzip
+    log
+}
+
+bot.217-149-25-34.sslip.io {
+    reverse_proxy bot404:8090
+}
+
+# Plain HTTP fallback on IP
+:80 {
+    reverse_proxy chatbot:8000
+}

@@ -22,23 +22,32 @@ class RAGSearchInput(BaseModel):
         default=None,
         description=(
             "Необязательный фильтр по категории: "
-            "'features', 'pricing', 'howto', 'faq', 'sales_scripts'. "
-            "Если не указан — ищет по всем категориям."
+            "'about' (что за продукт/компания/миссия), "
+            "'features' (функции), 'pricing' (цены/тарифы), "
+            "'howto' (инструкции), 'faq' (частые вопросы), "
+            "'cases' (кейсы клиентов), 'process' (процесс внедрения и демо), "
+            "'tech' (технические характеристики и API), "
+            "'sales_scripts' (скрипты продаж), "
+            "'proactive' (модуль проактивных рассылок), "
+            "'partner' (партнёрская программа, реферальные выплаты, как стать партнёром). "
+            "Если не указан — ищет по всем."
         ),
     )
-    n_results: int = Field(default=4, ge=1, le=10, description="Количество результатов.")
+    n_results: int = Field(default=6, ge=1, le=12, description="Количество результатов.")
 
 
 class RAGSearchTool(BaseTool):
     name: str = "Knowledge Base Search"
     description: str = (
-        "Ищет информацию в базе знаний компании. "
-        "Используй для ответов на вопросы о продуктах, ценах, функциях, "
-        "руководствах и FAQ. Всегда проверяй базу знаний перед ответом."
+        "Ищет информацию в базе знаний компании. Используй для ответов на вопросы "
+        "о компании, продуктах, ценах, функциях, интеграциях, безопасности, оплате, "
+        "кейсах, технических характеристиках, FAQ, процессе внедрения. "
+        "Если первый запрос не дал результата — попробуй переформулировать или искать без категории. "
+        "Всегда проверяй базу знаний перед ответом."
     )
     args_schema: type[BaseModel] = RAGSearchInput
 
-    def _run(self, query: str, category: str | None = None, n_results: int = 4) -> str:
+    def _run(self, query: str, category: str | None = None, n_results: int = 6) -> str:
         store = VectorStore()
 
         if store.count() == 0:
@@ -52,8 +61,8 @@ class RAGSearchTool(BaseTool):
         if not results:
             return "По данному запросу ничего не найдено в базе знаний."
 
-        # Фильтруем слишком далёкие результаты (cosine distance > 0.7)
-        relevant = [r for r in results if r["distance"] < 0.7]
+        # Фильтруем слишком далёкие результаты (cosine distance > 0.85 — мягко)
+        relevant = [r for r in results if r["distance"] < 0.85]
 
         if not relevant:
             return "Релевантной информации не найдено. Возможно, этот вопрос выходит за рамки базы знаний."

@@ -107,10 +107,12 @@ class VectorStore:
         query: str,
         n_results: int = 5,
         where: dict | None = None,
+        tenant_id: int | None = None,
     ) -> list[dict]:
         """
         Семантический поиск по базе знаний через pgvector.
-        Возвращает список dict с ключами: document, metadata, distance.
+        ОБЯЗАТЕЛЬНО передаётся tenant_id — фильтр в SQL-функции.
+        Если tenant_id=None — возвращаются только глобальные статьи (tenant_id IS NULL).
         """
         if self.count() == 0:
             return []
@@ -120,6 +122,15 @@ class VectorStore:
 
         category = where.get("category") if where else None
 
+        # Если caller не передал tenant_id (legacy) — берём из env DEFAULT_TENANT_ID или fallback на aisha (id=2)
+        effective_tid = tenant_id
+        if effective_tid is None:
+            import os as _os
+            try:
+                effective_tid = int(_os.environ.get("DEFAULT_TENANT_ID", "2"))
+            except Exception:
+                effective_tid = 2
+
         conn = _get_conn()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
@@ -128,10 +139,11 @@ class VectorStore:
                 FROM search_knowledge(
                     %s::vector,
                     %s,
+                    %s,
                     %s
                 )
                 """,
-                (embedding_str, n_results, category),
+                (embedding_str, effective_tid, n_results, category),
             )
             rows = cur.fetchall()
 

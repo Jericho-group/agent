@@ -1,0 +1,718 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>404ai · Root Admin</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<style>
+  :root { --ink:#0F1F1A; --paper:#F5F7F3; --leaf:#0B8A5B; --leaf-2:#06A36C; --gold:#E0B341; --rose:#D85A6A; --line:#E2E7DD; }
+  html,body { background: var(--paper); color: var(--ink); font-family: -apple-system, "SF Pro Text", Inter, Segoe UI, Roboto, sans-serif; }
+  .leaf { color: var(--leaf); }
+  .bg-leaf { background: var(--leaf); }
+  .ring-leaf { box-shadow: 0 0 0 1px var(--leaf-2); }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 14px; }
+  .pill { display:inline-flex; align-items:center; gap:.4em; padding:.2em .7em; border-radius:999px; font-size:.72rem; font-weight:600; letter-spacing:.02em; }
+  .pill-on   { background:#E7F6EE; color:var(--leaf); }
+  .pill-off  { background:#FCE7EA; color:var(--rose); }
+  .pill-plan { background:#FAF1DC; color:#8A6818; }
+  .progress { height: 6px; border-radius: 6px; background: var(--line); overflow: hidden; }
+  .progress > div { height: 100%; background: var(--leaf-2); transition: width .4s ease; }
+  .progress > div.warn { background: var(--gold); }
+  .progress > div.crit { background: var(--rose); }
+  table tbody tr:hover { background: rgba(11,138,91,.05); }
+  table th { font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; color: #5B6961; text-align: left; padding: 10px 14px; }
+  table td { padding: 12px 14px; border-top: 1px solid var(--line); font-size: .9rem; }
+  .btn { padding: 8px 14px; border-radius: 10px; font-weight: 600; font-size: .85rem; transition: all .15s; cursor: pointer; }
+  .btn-primary { background: var(--leaf); color: #fff; }
+  .btn-primary:hover { background: var(--leaf-2); }
+  .btn-secondary { background: #fff; color: var(--ink); border: 1px solid var(--line); }
+  .btn-secondary:hover { border-color: var(--leaf); }
+  .btn-danger { background: #fff; color: var(--rose); border: 1px solid #F3C5CC; }
+  .btn-danger:hover { background: #FCE7EA; }
+  .switch { width: 42px; height: 24px; background: #DDE2D8; border-radius: 24px; position: relative; cursor: pointer; transition: background .2s; }
+  .switch.on { background: var(--leaf); }
+  .switch::after { content:''; position:absolute; top:3px; left:3px; width:18px; height:18px; background:#fff; border-radius:50%; transition: transform .2s; box-shadow: 0 1px 3px rgba(0,0,0,.2); }
+  .switch.on::after { transform: translateX(18px); }
+  .modal-bg { background: rgba(15,31,26,.55); backdrop-filter: blur(4px); }
+  input[type=text], input[type=number], select { background: #fff; border:1px solid var(--line); border-radius:8px; padding: 8px 12px; font-size: .9rem; width: 100%; }
+  input:focus, select:focus { outline: none; border-color: var(--leaf); box-shadow: 0 0 0 3px rgba(11,138,91,.15); }
+  label { font-size: .78rem; font-weight: 600; color: #4A5750; display: block; margin-bottom: 4px; }
+  .kpi { background: linear-gradient(135deg, #fff, #F8FAF6); border:1px solid var(--line); border-radius: 12px; padding: 14px 18px; }
+  .skel { background: linear-gradient(90deg, #eef2ec 25%, #f7f9f5 50%, #eef2ec 75%); background-size: 200% 100%; animation: skel 1.4s infinite; border-radius: 6px; }
+  @keyframes skel { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+  .num { font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body x-data="rootAdmin()" x-init="init()" class="min-h-screen">
+
+<!-- ── Login screen ─────────────────────────────────────────────────────────── -->
+<template x-if="!auth">
+  <div class="min-h-screen flex items-center justify-center px-4">
+    <div class="card p-8 w-full max-w-sm">
+      <div class="flex items-center gap-3 mb-6">
+        <div class="w-9 h-9 rounded-lg bg-leaf flex items-center justify-center text-white font-bold">4</div>
+        <div>
+          <div class="font-bold">404ai</div>
+          <div class="text-xs text-gray-500">Root Admin</div>
+        </div>
+      </div>
+      <label>Admin token</label>
+      <input type="text" x-model="loginToken" @keydown.enter="login()" placeholder="ADMIN_TOKEN" autofocus />
+      <button class="btn btn-primary w-full mt-4" @click="login()">Войти</button>
+      <p class="text-xs text-gray-500 mt-3" x-text="loginErr"></p>
+    </div>
+  </div>
+</template>
+
+<!-- ── Main app ─────────────────────────────────────────────────────────────── -->
+<template x-if="auth">
+<div>
+  <!-- Header -->
+  <header class="border-b border-[#E2E7DD] bg-white">
+    <div class="max-w-6xl mx-auto px-6 py-3 flex items-center gap-4">
+      <div class="w-8 h-8 rounded-lg bg-leaf flex items-center justify-center text-white font-bold text-sm">4</div>
+      <div>
+        <div class="font-bold text-sm leading-tight">404ai · Root</div>
+        <div class="text-[11px] text-gray-500 leading-tight">Multi-tenant control plane</div>
+      </div>
+      <div class="flex-1"></div>
+      <div class="text-xs text-gray-500">
+        Авто-обновление <span x-text="refreshLabel"></span>
+        <button class="ml-2 underline" @click="refresh()">↻</button>
+      </div>
+      <button class="btn btn-secondary" @click="logout()">Выход</button>
+    </div>
+  </header>
+
+  <main class="max-w-6xl mx-auto px-6 py-6">
+    <!-- KPI -->
+    <div class="grid grid-cols-5 gap-4 mb-6">
+      <div class="kpi">
+        <div class="text-xs text-gray-500">Всего тенантов</div>
+        <div class="text-2xl font-bold num" x-text="tenants.length || '—'"></div>
+      </div>
+      <div class="kpi">
+        <div class="text-xs text-gray-500">Активных</div>
+        <div class="text-2xl font-bold num leaf" x-text="tenants.filter(t=>t.enabled).length"></div>
+      </div>
+      <div class="kpi">
+        <div class="text-xs text-gray-500">На паузе</div>
+        <div class="text-2xl font-bold num" :class="tenants.filter(t=>!t.enabled).length?'text-rose-500':''" x-text="tenants.filter(t=>!t.enabled).length"></div>
+      </div>
+      <div class="kpi">
+        <div class="text-xs text-gray-500">Расход всего, ₽/мес</div>
+        <div class="text-2xl font-bold num" x-text="totalSpentRub.toFixed(2)"></div>
+      </div>
+      <div class="kpi">
+        <div class="text-xs text-gray-500">Баланс AItunnel, ₽</div>
+        <div class="text-2xl font-bold num" :class="(providerBalance!=null && providerBalance<1000)?'text-rose-500':'leaf'" x-text="providerBalance!=null ? providerBalance.toFixed(2) : '—'"></div>
+        <div class="text-[10px] text-gray-400" x-text="providerBalanceAt ? 'обновлён '+balanceAgo+' назад' : 'нет данных'"></div>
+      </div>
+    </div>
+
+    <!-- Filter + actions -->
+    <div class="flex items-center gap-3 mb-4">
+      <input type="text" x-model="q" placeholder="Поиск по slug или name…" class="max-w-xs" />
+      <div class="flex-1"></div>
+    </div>
+
+    <!-- Table -->
+    <div class="card overflow-hidden">
+      <table class="w-full">
+        <thead class="bg-[#F8FAF6]">
+          <tr>
+            <th>slug / name</th>
+            <th>план</th>
+            <th>модель</th>
+            <th>RPM</th>
+            <th>токены/день</th>
+            <th>бюджет ₽/мес</th>
+            <th>статус</th>
+            <th class="text-right pr-4">действия</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-if="loading && !tenants.length">
+            <tr><td colspan="8"><div class="skel h-8 my-1"></div></td></tr>
+          </template>
+          <template x-for="t in filtered" :key="t.tenant_id">
+            <tr>
+              <td>
+                <div class="font-semibold" x-text="t.slug"></div>
+                <div class="text-xs text-gray-500" x-text="t.name"></div>
+              </td>
+              <td><span class="pill pill-plan" x-text="t.plan_code"></span></td>
+              <td class="text-xs text-gray-600 font-mono" x-text="t.model"></td>
+              <td>
+                <div class="num text-xs mb-1"><span x-text="t.usage.rpm_now"></span>/<span x-text="t.rpm_limit"></span></div>
+                <div class="progress"><div :style="`width:${pct(t.usage.rpm_now, t.rpm_limit)}%`" :class="cls(t.usage.rpm_now, t.rpm_limit)"></div></div>
+              </td>
+              <td>
+                <div class="num text-xs mb-1"><span x-text="fmt(t.usage.tokens_today)"></span>/<span x-text="fmt(t.daily_tokens_limit)"></span></div>
+                <div class="progress"><div :style="`width:${pct(t.usage.tokens_today, t.daily_tokens_limit)}%`" :class="cls(t.usage.tokens_today, t.daily_tokens_limit)"></div></div>
+              </td>
+              <td>
+                <div class="num text-xs mb-1"><span x-text="t.usage.cost_rub_month.toFixed(2)"></span>/<span x-text="fmt(t.monthly_budget_rub)"></span></div>
+                <div class="progress"><div :style="`width:${pct(t.usage.cost_rub_month, t.monthly_budget_rub)}%`" :class="cls(t.usage.cost_rub_month, t.monthly_budget_rub)"></div></div>
+              </td>
+              <td>
+                <div class="switch" :class="t.enabled?'on':''" @click="toggleEnabled(t)" title="Включить / выключить тенанта"></div>
+              </td>
+              <td class="text-right pr-4 whitespace-nowrap">
+                <button class="btn btn-secondary" @click="impersonate(t)" title="Зайти как этот клиент">👤</button>
+                <button class="btn btn-secondary" @click="openEdit(t)" title="Лимиты и план">⚙</button>
+                <button class="btn btn-secondary" @click="openBrand(t)" title="Брендинг виджета">🎨</button>
+                <button class="btn btn-secondary" @click="resetUsage(t)" title="Сбросить счётчики Redis">⟲</button>
+              </td>
+            </tr>
+          </template>
+          <template x-if="!loading && !filtered.length">
+            <tr><td colspan="8" class="text-center py-8 text-gray-500">Тенанты не найдены</td></tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="text-xs text-gray-500 mt-4">
+      RPM-окно — 60 сек. Дневной счётчик — сутки UTC. Бюджет — месяц UTC.
+      Если бюджет в ₽ = 0 — лимит отключён (∞).
+    </p>
+
+    <!-- Расход по всем тенантам (Phase 12) -->
+    <div class="mt-8">
+      <h2 class="text-sm font-bold uppercase tracking-widest text-gray-500 mb-3">Расходы по тенантам · последние 7 дней</h2>
+      <div class="card p-5 mb-3">
+        <template x-if="!usageAll || !usageAll.summary?.length">
+          <div class="text-center py-6 text-gray-400 text-sm">Загрузка…</div>
+        </template>
+        <template x-if="usageAll && usageAll.series?.length">
+          <div>
+            <svg viewBox="0 0 700 180" style="width:100%;height:180px;display:block;">
+              <template x-for="i in 5" :key="i">
+                <line :x1="40" :y1="20 + (i-1)*32" :x2="690" :y2="20 + (i-1)*32" stroke="#ECECEC" stroke-width="0.5"></line>
+              </template>
+              <polyline :points="usageAllPath" fill="none" stroke="#0B8A5B" stroke-width="2.5" stroke-linejoin="round"></polyline>
+              <template x-for="(p, idx) in usageAll.series" :key="'p'+idx">
+                <g>
+                  <circle :cx="usageAllX(idx)" :cy="usageAllY(p.total)" r="3" fill="#fff" stroke="#0B8A5B" stroke-width="1.8"></circle>
+                  <text :x="usageAllX(idx)" y="170" text-anchor="middle" font-size="10" fill="#8A8A90" x-text="fmtUsageDay(p.date)"></text>
+                </g>
+              </template>
+            </svg>
+          </div>
+        </template>
+      </div>
+
+      <table class="w-full card overflow-hidden">
+        <thead class="bg-[#F8FAF6]">
+          <tr><th>тенант</th><th class="text-right">вызовы</th><th class="text-right">токены</th><th class="text-right pr-4">расход, ₽</th></tr>
+        </thead>
+        <tbody>
+          <template x-for="row in (usageAll?.summary||[])" :key="row.tenant_id">
+            <tr>
+              <td>
+                <div class="font-semibold text-xs" x-text="row.slug"></div>
+                <div class="text-[10px] text-gray-500" x-text="row.name"></div>
+              </td>
+              <td class="text-right num text-xs" x-text="row.calls.toLocaleString('ru')"></td>
+              <td class="text-right num text-xs" style="color:#5A5A60;" x-text="row.tokens.toLocaleString('ru')"></td>
+              <td class="text-right pr-4 num font-semibold text-sm" style="color:#0B8A5B;" x-text="row.cost_rub.toFixed(2)"></td>
+            </tr>
+          </template>
+          <template x-if="usageAll && usageAll.summary && !usageAll.summary.length">
+            <tr><td colspan="4" class="text-center py-6 text-gray-400 text-sm">Нет расходов за период</td></tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Audit log -->
+    <div class="mt-8">
+      <div class="mb-3">
+        <h2 class="text-sm font-bold uppercase tracking-widest text-gray-500">Аудит · последние 200 событий</h2>
+      </div>
+      <div class="card overflow-hidden">
+        <table class="w-full">
+          <thead class="bg-[#F8FAF6]">
+            <tr><th>тенант</th><th>действие</th><th>актор</th><th class="text-right pr-4">когда</th></tr>
+          </thead>
+          <tbody>
+            <template x-if="!auditEvents || !auditEvents.length">
+              <tr><td colspan="4" class="text-center py-6 text-gray-400 text-sm">Нет событий</td></tr>
+            </template>
+            <template x-for="e in (auditEvents||[])" :key="e.id">
+              <tr>
+                <td>
+                  <div class="font-semibold text-xs" x-text="e.target_slug || '—'"></div>
+                  <div class="text-[10px] text-gray-500" x-text="e.target_name||''"></div>
+                </td>
+                <td>
+                  <div class="font-medium text-xs" x-text="e.action"></div>
+                  <div class="text-[10px] text-gray-500 font-mono truncate max-w-[400px]" x-text="e.payload ? JSON.stringify(e.payload) : ''"></div>
+                </td>
+                <td class="text-xs" x-text="e.actor_email || '—'"></td>
+                <td class="text-right pr-4 text-[11px] text-gray-500" x-text="new Date(e.ts).toLocaleString('ru')"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <!-- ── Edit modal ─────────────────────────────────────────────────────────── -->
+  <template x-if="edit">
+    <div class="fixed inset-0 modal-bg flex items-center justify-center z-50 px-4" @click.self="edit=null">
+      <div class="card p-6 w-full max-w-lg">
+        <div class="flex items-start justify-between mb-4">
+          <div>
+            <div class="text-xs text-gray-500">Тенант</div>
+            <div class="text-xl font-bold" x-text="edit.slug"></div>
+            <div class="text-sm text-gray-600" x-text="edit.name"></div>
+          </div>
+          <button class="text-gray-400 hover:text-gray-700 text-xl" @click="edit=null">×</button>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div class="col-span-2">
+            <label>План</label>
+            <select x-model="editForm.plan_code">
+              <option value="trial">Trial</option>
+              <option value="start">Start</option>
+              <option value="pro">Pro</option>
+              <option value="enterprise">Enterprise</option>
+            </select>
+          </div>
+          <div class="col-span-2">
+            <label>Модель override (пусто = из плана)</label>
+            <select x-model="editForm.model_override">
+              <option value="">— из плана —</option>
+              <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
+              <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+              <option value="gpt-4o-mini">gpt-4o-mini</option>
+              <option value="claude-opus">claude-opus</option>
+            </select>
+          </div>
+          <div>
+            <label>RPM override</label>
+            <input type="number" min="0" x-model.number="editForm.rpm_override" placeholder="из плана" />
+          </div>
+          <div>
+            <label>Токены/сутки override</label>
+            <input type="number" min="0" x-model.number="editForm.daily_tokens_override" placeholder="из плана" />
+          </div>
+          <div class="col-span-2">
+            <label>Бюджет ₽/мес override (0 = безлимит)</label>
+            <input type="number" min="0" x-model.number="editForm.monthly_budget_rub_override" placeholder="из плана" />
+          </div>
+        </div>
+
+        <div class="flex items-center gap-2 mt-6">
+          <button class="btn btn-danger" @click="deleteOverrides()" title="Снять все overrides → берём из плана">Очистить overrides</button>
+          <div class="flex-1"></div>
+          <button class="btn btn-secondary" @click="edit=null">Отмена</button>
+          <button class="btn btn-primary" @click="save()">Сохранить</button>
+        </div>
+        <p class="text-xs text-rose-500 mt-3" x-text="editErr"></p>
+      </div>
+    </div>
+  </template>
+
+  <!-- ── Branding modal ─────────────────────────────────────────────────────── -->
+  <template x-if="brand">
+    <div class="fixed inset-0 modal-bg flex items-center justify-center z-50 px-4" @click.self="brand=null">
+      <div class="card p-6 w-full max-w-4xl">
+        <div class="flex items-start justify-between mb-4">
+          <div>
+            <div class="text-xs text-gray-500">Брендинг виджета</div>
+            <div class="text-xl font-bold" x-text="brand.slug"></div>
+            <div class="text-sm text-gray-600" x-text="brand.name"></div>
+          </div>
+          <button class="text-gray-400 hover:text-gray-700 text-xl" @click="brand=null">×</button>
+        </div>
+
+        <div class="grid grid-cols-2 gap-6">
+          <!-- ─ form ─ -->
+          <div class="space-y-3">
+            <div>
+              <label>Имя бренда</label>
+              <input type="text" x-model="brandForm.brand_name" placeholder="404ai / Acme Dental / …" />
+            </div>
+            <div>
+              <label>Имя ассистента</label>
+              <input type="text" x-model="brandForm.bot_name" placeholder="Аиша / Лера / Ассистент" />
+            </div>
+            <div>
+              <label>Подзаголовок (под именем)</label>
+              <input type="text" x-model="brandForm.role_subtitle" placeholder="AI-консультант · обычно отвечает сразу" />
+            </div>
+            <div>
+              <label>URL логотипа (используется как аватарка)</label>
+              <input type="text" x-model="brandForm.logo_url" placeholder="https://acme.ru/logo.png" />
+            </div>
+            <div class="grid grid-cols-3 gap-2">
+              <div>
+                <label>Основной</label>
+                <input type="color" x-model="brandForm.primary_color" style="height:38px;padding:2px" />
+              </div>
+              <div>
+                <label>Акцент</label>
+                <input type="color" x-model="brandForm.accent_color" style="height:38px;padding:2px" />
+              </div>
+              <div>
+                <label>Позиция</label>
+                <select x-model="brandForm.position">
+                  <option value="br">↘ снизу-справа</option>
+                  <option value="bl">↙ снизу-слева</option>
+                  <option value="tr">↗ сверху-справа</option>
+                  <option value="tl">↖ сверху-слева</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <label>Приветствие (первое сообщение от бота)</label>
+              <textarea x-model="brandForm.greeting" rows="3" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 12px;font-size:.9rem;resize:vertical;font-family:inherit" placeholder="Здравствуйте! Я Аиша…"></textarea>
+            </div>
+            <div>
+              <label>Текст подсказки (bubble рядом с виджетом)</label>
+              <input type="text" x-model="brandForm.nudge_text" placeholder="Нужна помощь? Спросите &lt;b&gt;Аишу&lt;/b&gt;" />
+            </div>
+            <div>
+              <label>Email менеджера (для эскалации)</label>
+              <input type="text" x-model="brandForm.manager_email" placeholder="ap@acme.ru" />
+            </div>
+          </div>
+
+          <!-- ─ preview ─ -->
+          <div>
+            <label>Превью</label>
+            <div class="card p-4" style="background:#f0f3ed;border-radius:14px;min-height:420px;position:relative;overflow:hidden">
+              <!-- fake page lines -->
+              <div class="space-y-2 opacity-30">
+                <div class="h-3 bg-gray-300 rounded w-3/4"></div>
+                <div class="h-3 bg-gray-300 rounded w-1/2"></div>
+                <div class="h-3 bg-gray-300 rounded w-2/3"></div>
+                <div class="h-3 bg-gray-300 rounded w-1/3"></div>
+              </div>
+              <!-- preview widget -->
+              <div :style="`position:absolute;${previewPosCss};display:flex;flex-direction:column;align-items:${brandForm.position?.endsWith('r')?'flex-end':'flex-start'};gap:8px`">
+                <div class="card" :style="`width:280px;border-radius:16px;overflow:hidden;box-shadow:0 12px 30px -10px rgba(0,0,0,.25)`">
+                  <div :style="`background:${brandForm.primary_color||'#0B8A5B'};color:#fff;padding:12px 14px;display:flex;align-items:center;gap:10px`">
+                    <div :style="`width:36px;height:36px;border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden`">
+                      <template x-if="brandForm.logo_url">
+                        <img :src="brandForm.logo_url" style="width:100%;height:100%;object-fit:cover" />
+                      </template>
+                      <template x-if="!brandForm.logo_url">
+                        <div :style="`color:${brandForm.primary_color||'#0B8A5B'};font-weight:bold`" x-text="(brandForm.bot_name||'A').charAt(0)"></div>
+                      </template>
+                    </div>
+                    <div class="flex-1">
+                      <div class="text-sm font-bold" x-text="brandForm.bot_name||'Ассистент'"></div>
+                      <div class="text-[10px] opacity-90" x-text="brandForm.role_subtitle||'AI-консультант'"></div>
+                    </div>
+                  </div>
+                  <div class="bg-white p-3" style="min-height:80px">
+                    <div :style="`background:${primaryWash};border-radius:12px;padding:8px 12px;font-size:13px;max-width:80%;color:#1A1A1A`" x-text="(brandForm.greeting||'Здравствуйте! Чем могу помочь?').slice(0,160)"></div>
+                  </div>
+                </div>
+                <div :style="`background:#fff;border-radius:999px;padding:8px 14px;font-size:13px;font-weight:600;box-shadow:0 6px 16px -8px rgba(0,0,0,.3)`" x-html="brandForm.nudge_text||'Нужна помощь?'"></div>
+                <div :style="`width:60px;height:60px;border-radius:50%;background:${brandForm.primary_color||'#0B8A5B'};display:flex;align-items:center;justify-content:center;color:#fff;box-shadow:0 12px 30px -10px rgba(0,0,0,.4);font-size:24px`">💬</div>
+              </div>
+            </div>
+            <div class="text-xs text-gray-500 mt-2">Превью обновляется на лету. Реальный виджет применит изменения через ~60 сек (кэш) или после очистки кэша браузера.</div>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-2 mt-6">
+          <button class="btn btn-danger" @click="resetBrand()" title="Сбросить все поля → дефолты">Сбросить</button>
+          <div class="flex-1"></div>
+          <button class="btn btn-secondary" @click="brand=null">Отмена</button>
+          <button class="btn btn-primary" @click="saveBrand()">Сохранить</button>
+        </div>
+        <p class="text-xs text-rose-500 mt-3" x-text="brandErr"></p>
+      </div>
+    </div>
+  </template>
+
+  <!-- ── Toast ──────────────────────────────────────────────────────────────── -->
+  <div class="fixed bottom-6 right-6 z-40 space-y-2" x-show="toasts.length">
+    <template x-for="t in toasts" :key="t.id">
+      <div class="card px-4 py-3 shadow-lg" :class="t.kind==='err'?'border-rose-300':''" x-transition>
+        <div class="text-sm" x-text="t.msg"></div>
+      </div>
+    </template>
+  </div>
+</div>
+</template>
+
+<script>
+function rootAdmin() {
+  return {
+    auth: false,
+    loginToken: '',
+    loginErr: '',
+    token: localStorage.getItem('rootAdminToken') || '',
+    tenants: [],
+    providerBalance: null,
+    providerBalanceAt: null,
+    auditEvents: null,
+    usageAll: null,
+    loading: true,
+    get usageAllPath() {
+      const s = this.usageAll?.series || [];
+      if (!s.length) return '';
+      return s.map((p, i) => `${this.usageAllX(i)},${this.usageAllY(p.total)}`).join(' ');
+    },
+    usageAllX(idx) {
+      const n = this.usageAll?.series?.length || 1;
+      if (n === 1) return 365;
+      return 40 + (idx * (650 / (n - 1)));
+    },
+    usageAllY(val) {
+      const max = Math.max(0.01, ...(this.usageAll?.series || []).map(p => p.total));
+      return 150 - ((Number(val || 0) / max) * 130);
+    },
+    fmtUsageDay(d) {
+      const dt = new Date(d);
+      return ('0'+dt.getDate()).slice(-2) + '.' + ('0'+(dt.getMonth()+1)).slice(-2);
+    },
+    q: '',
+    edit: null,
+    editForm: {},
+    editErr: '',
+    brand: null,
+    brandForm: {},
+    brandErr: '',
+    get primaryWash() {
+      const hex = (this.brandForm?.primary_color || '#0B8A5B').replace('#','');
+      if (hex.length !== 6) return 'rgba(11,138,91,0.10)';
+      const r = parseInt(hex.slice(0,2),16), g = parseInt(hex.slice(2,4),16), b = parseInt(hex.slice(4,6),16);
+      return `rgba(${r},${g},${b},0.10)`;
+    },
+    get previewPosCss() {
+      const p = this.brandForm?.position || 'br';
+      return ({
+        br: 'right:14px;bottom:14px',
+        bl: 'left:14px;bottom:14px',
+        tr: 'right:14px;top:14px',
+        tl: 'left:14px;top:14px',
+      })[p];
+    },
+    toasts: [],
+    refreshTimer: null,
+    refreshSec: 0,
+    refreshLabel: '',
+    get balanceAgo() {
+      if (!this.providerBalanceAt) return '';
+      const s = Math.max(0, Math.round((Date.now() - this.providerBalanceAt) / 1000));
+      if (s < 60) return s + 'с';
+      if (s < 3600) return Math.round(s/60) + ' мин';
+      return Math.round(s/3600) + ' ч';
+    },
+
+    async init() {
+      if (this.token) {
+        await this.refresh();
+        if (this.tenants.length > 0 || !this.lastErr401) this.auth = true;
+      }
+      setInterval(() => {
+        this.refreshSec++;
+        this.refreshLabel = this.refreshSec >= 5 ? ' ' : ' (через '+(5-this.refreshSec)+'с)';
+        if (this.refreshSec >= 5 && this.auth) { this.refreshSec = 0; this.refresh(); }
+      }, 1000);
+    },
+    async login() {
+      this.token = this.loginToken.trim();
+      this.loginErr = '';
+      await this.refresh();
+      if (this.lastErr401) { this.loginErr = 'Неверный токен'; return; }
+      localStorage.setItem('rootAdminToken', this.token);
+      this.auth = true;
+    },
+    logout() {
+      localStorage.removeItem('rootAdminToken');
+      this.auth = false;
+      this.token = '';
+      this.loginToken = '';
+      this.tenants = [];
+    },
+    async refresh() {
+      try {
+        this.loading = true;
+        const r = await fetch('/api/admin/tenants', { headers: { 'X-Admin-Token': this.token } });
+        if (r.status === 401) { this.lastErr401 = true; return; }
+        this.lastErr401 = false;
+        const j = await r.json();
+        this.tenants = j.tenants || [];
+        if (j.provider_balance) {
+          this.providerBalance = j.provider_balance.balance_rub;
+          this.providerBalanceAt = j.provider_balance.at;
+        }
+        this.loadAudit();
+        this.loadUsageAll();
+      } catch (e) {
+        this.toast('Сеть: ' + e.message, 'err');
+      } finally {
+        this.loading = false;
+      }
+    },
+    get filtered() {
+      const q = this.q.trim().toLowerCase();
+      if (!q) return this.tenants;
+      return this.tenants.filter(t => (t.slug+' '+t.name+' '+t.plan_code).toLowerCase().includes(q));
+    },
+    get totalSpentRub() {
+      return this.tenants.reduce((s, t) => s + (t.usage?.cost_rub_month || 0), 0);
+    },
+    pct(used, limit) {
+      if (!limit) return 0;
+      return Math.min(100, Math.round(100 * used / limit));
+    },
+    cls(used, limit) {
+      const p = this.pct(used, limit);
+      return p >= 95 ? 'crit' : p >= 80 ? 'warn' : '';
+    },
+    fmt(n) {
+      n = Number(n) || 0;
+      if (n >= 1_000_000) return (n/1_000_000).toFixed(1) + 'M';
+      if (n >= 1000) return (n/1000).toFixed(1) + 'k';
+      return n.toString();
+    },
+    async toggleEnabled(t) {
+      const newVal = !t.enabled;
+      try {
+        const r = await fetch('/api/admin/tenants/' + t.slug, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Admin-Token': this.token },
+          body: JSON.stringify({ enabled: newVal }),
+        });
+        if (!r.ok) throw new Error('HTTP '+r.status);
+        t.enabled = newVal;
+        this.toast(t.slug + ' ' + (newVal ? 'включён' : 'выключен'));
+      } catch (e) { this.toast('Ошибка: ' + e.message, 'err'); }
+    },
+    openEdit(t) {
+      this.edit = t;
+      this.editForm = {
+        plan_code: t.plan_code,
+        model_override: '',
+        rpm_override: null,
+        daily_tokens_override: null,
+        monthly_budget_rub_override: null,
+      };
+      this.editErr = '';
+    },
+    async save() {
+      const body = {};
+      if (this.editForm.plan_code) body.plan_code = this.editForm.plan_code;
+      body.model_override = this.editForm.model_override || null;
+      body.rpm_override = this.editForm.rpm_override === '' ? null : this.editForm.rpm_override;
+      body.daily_tokens_override = this.editForm.daily_tokens_override === '' ? null : this.editForm.daily_tokens_override;
+      body.monthly_budget_rub_override = this.editForm.monthly_budget_rub_override === '' ? null : this.editForm.monthly_budget_rub_override;
+      try {
+        const r = await fetch('/api/admin/tenants/' + this.edit.slug, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Admin-Token': this.token },
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) { this.editErr = 'HTTP '+r.status; return; }
+        this.edit = null;
+        this.toast('Сохранено');
+        await this.refresh();
+      } catch (e) { this.editErr = e.message; }
+    },
+    async deleteOverrides() {
+      this.editForm.model_override = '';
+      this.editForm.rpm_override = null;
+      this.editForm.daily_tokens_override = null;
+      this.editForm.monthly_budget_rub_override = null;
+      await this.save();
+    },
+    async openBrand(t) {
+      this.brand = t;
+      this.brandForm = {};
+      this.brandErr = '';
+      try {
+        const r = await fetch('/api/admin/tenants/' + t.slug + '/branding', { headers: { 'X-Admin-Token': this.token } });
+        const j = await r.json();
+        this.brandForm = Object.assign({
+          brand_name: '', bot_name: '', role_subtitle: '', logo_url: '',
+          primary_color: '#0B8A5B', accent_color: '#E0B341',
+          greeting: '', nudge_text: '', manager_email: '', position: 'br',
+        }, j.branding || {});
+      } catch (e) { this.brandErr = e.message; }
+    },
+    async saveBrand() {
+      const body = {};
+      ['brand_name','bot_name','role_subtitle','logo_url','primary_color','accent_color','greeting','nudge_text','manager_email','position'].forEach(k => {
+        body[k] = this.brandForm[k] || null;
+      });
+      try {
+        const r = await fetch('/api/admin/tenants/' + this.brand.slug + '/branding', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Admin-Token': this.token },
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) { this.brandErr = 'HTTP ' + r.status; return; }
+        this.brand = null;
+        this.toast('Брендинг сохранён — обновится в виджете через ~60 сек');
+      } catch (e) { this.brandErr = e.message; }
+    },
+    async resetBrand() {
+      if (!confirm('Сбросить все поля брендинга для ' + this.brand.slug + '?')) return;
+      this.brandForm = {
+        brand_name: null, bot_name: null, role_subtitle: null, logo_url: null,
+        primary_color: null, accent_color: null,
+        greeting: null, nudge_text: null, manager_email: null, position: null,
+      };
+      await this.saveBrand();
+    },
+    async impersonate(t) {
+      try {
+        const r = await fetch('/api/admin/tenants/' + t.slug + '/impersonate', {
+          method: 'POST', headers: { 'X-Admin-Token': this.token },
+        });
+        if (!r.ok) { this.toast('Ошибка: HTTP ' + r.status, 'err'); return; }
+        const j = await r.json();
+        this.toast('Открываю ЛК как ' + t.slug + '…');
+        window.open(j.url, '_blank');
+      } catch (e) { this.toast('Ошибка: ' + e.message, 'err'); }
+    },
+    async loadAudit() {
+      try {
+        const r = await fetch('/api/admin/audit?limit=200', { headers: { 'X-Admin-Token': this.token } });
+        if (!r.ok) { this.auditEvents = []; return; }
+        const j = await r.json();
+        this.auditEvents = j.events || [];
+      } catch (e) { this.auditEvents = []; }
+    },
+    async loadUsageAll() {
+      try {
+        const r = await fetch('/api/admin/usage/all?days=7', { headers: { 'X-Admin-Token': this.token } });
+        if (!r.ok) return;
+        this.usageAll = await r.json();
+      } catch (e) {}
+    },
+    async resetUsage(t) {
+      if (!confirm('Сбросить Redis-счётчики для ' + t.slug + '?')) return;
+      try {
+        const r = await fetch('/api/admin/tenants/' + t.slug + '/reset-usage', {
+          method: 'POST', headers: { 'X-Admin-Token': this.token },
+        });
+        if (!r.ok) throw new Error('HTTP '+r.status);
+        this.toast('Счётчики сброшены');
+        await this.refresh();
+      } catch (e) { this.toast('Ошибка: ' + e.message, 'err'); }
+    },
+    toast(msg, kind) {
+      const id = Math.random().toString(36).slice(2);
+      this.toasts.push({ id, msg, kind: kind || 'ok' });
+      setTimeout(() => { this.toasts = this.toasts.filter(t => t.id !== id); }, 3500);
+    },
+  };
+}
+</script>
+</body>
+</html>
