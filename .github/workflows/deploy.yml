@@ -24,9 +24,12 @@ jobs:
           # Копирую chatbot_project (кроме .env, vendor, .git)
           rsync -az --delete \
                 --filter='protect .env' --filter='protect .env.*' \
+                --filter='protect docker-compose.yml' \
+                --filter='protect Caddyfile' \
                 --exclude='.env' --exclude='.env.*' --exclude='vendor/' \
                 --exclude='.git/' --exclude='__pycache__/' --exclude='data/' \
                 --exclude='bot404/' \
+                --exclude='docker-compose.yml' --exclude='Caddyfile' \
                 . "$HOST":/opt/chatbot/chatbot_project/
 
           # Копирую bot404 отдельно
@@ -65,9 +68,12 @@ jobs:
 
           rsync -az --delete \
                 --filter='protect .env' --filter='protect .env.*' \
+                --filter='protect docker-compose.yml' \
+                --filter='protect Caddyfile' \
                 --exclude='.env' --exclude='.env.*' --exclude='vendor/' \
                 --exclude='.git/' --exclude='__pycache__/' --exclude='data/' \
                 --exclude='bot404/' \
+                --exclude='docker-compose.yml' --exclude='Caddyfile' \
                 . "$HOST":/opt/chatbot/chatbot_project/
 
           rsync -az --delete \
