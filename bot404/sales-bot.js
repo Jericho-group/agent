@@ -101,6 +101,13 @@ ${managerEmail ? managerEmail : 'при эскалации попроси кли
 }
 
 export function systemPrompt(tenant) {
+  // Кастомный промпт тенанта (из tenant_integrations) перекрывает всё — клиент приносит свой сценарий.
+  if (tenant && tenant.system_prompt && String(tenant.system_prompt).trim()) {
+    let p = String(tenant.system_prompt).trim();
+    const kb = tenant.__kbContext || '';
+    if (kb) p += '\n\n# БАЗА ЗНАНИЙ (используй факты только отсюда)\n' + kb;
+    return p;
+  }
   // Non-Aisha tenants get a generic RAG-driven prompt built from branding.
   if (tenant && tenant.slug && tenant.slug !== 'aisha' && tenant.slug !== 'default') {
     return genericPrompt(tenant);

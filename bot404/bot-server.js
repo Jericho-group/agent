@@ -329,13 +329,48 @@ function extractSlug(host, headerOverride) {
 async function loadTenant(slug) {
   const r = await pool.query(
     `SELECT l.tenant_id, l.slug, l.name, l.enabled, l.plan_code, l.model, l.rpm_limit, l.daily_tokens_limit, l.monthly_budget_rub, l.allowed_models,
-            b.greeting AS branding_greeting, b.bot_name AS branding_bot_name, b.brand_name AS branding_brand_name, b.manager_email AS branding_manager_email
+            b.greeting AS branding_greeting, b.bot_name AS branding_bot_name, b.brand_name AS branding_brand_name, b.role_subtitle AS branding_role_subtitle, b.manager_email AS branding_manager_email,
+            i.system_prompt, i.bitrix_webhook, i.bitrix_source_id, i.bitrix_assigned_by
      FROM v_tenant_effective_limits l
      LEFT JOIN v_tenant_branding b ON b.tenant_id = l.tenant_id
+     LEFT JOIN tenant_integrations i ON i.tenant_id = l.tenant_id
      WHERE l.slug=$1 LIMIT 1`,
     [slug]
   );
   return r.rows[0] || null;
+}
+
+// ── Bitrix24: создание лида по вебхуку тенанта ───────────────────────────────
+// bitrix_webhook хранится как базовый URL входящего вебхука:
+//   https://<portal>/rest/<user_id>/<code>/   (метод дописываем сами)
+async function bitrixCall(base, method, params) {
+  const url = String(base).replace(/\/+$/, '') + '/' + method + '.json';
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params || {}),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (d && d.error) throw new Error(d.error + ': ' + (d.error_description || ''));
+  return d ? d.result : null;
+}
+
+async function pushLeadToBitrix(tenant, c, transcript, sid) {
+  if (!tenant || !tenant.bitrix_webhook) return null;
+  const who = c.phone || c.email || c.telegram || sid;
+  const fields = {
+    TITLE: 'Лид с Авито · ' + who,
+    NAME: c.name || '',
+    SOURCE_ID: tenant.bitrix_source_id || 'WEB',
+    SOURCE_DESCRIPTION: 'Эхо-бот (Авито) · ' + (tenant.name || tenant.slug),
+    COMMENTS: transcript,
+    OPENED: 'Y',
+  };
+  if (c.phone)    fields.PHONE = [{ VALUE: c.phone, VALUE_TYPE: 'WORK' }];
+  if (c.email)    fields.EMAIL = [{ VALUE: c.email, VALUE_TYPE: 'WORK' }];
+  if (c.telegram) fields.IM    = [{ VALUE: c.telegram, VALUE_TYPE: 'TELEGRAM' }];
+  if (tenant.bitrix_assigned_by) fields.ASSIGNED_BY_ID = tenant.bitrix_assigned_by;
+  return bitrixCall(tenant.bitrix_webhook, 'crm.lead.add', { fields, params: { REGISTER_SONET_EVENT: 'Y' } });
 }
 
 const EMBED_KEY = process.env.OPENAI_API_KEY || process.env.BOT_LLM_KEY || '';
@@ -695,6 +730,12 @@ app.post('/api/sales-chat', resolveTenant, async (req, res) => {
           );
           // Авто-склейка с прошлыми сессиями того же клиента (по контакту)
           mergeFactsFromContact(pool, sid, tid, c).catch(() => {});
+          // Push лида в Bitrix24, если у тенанта настроен вебхук (не блокируем ответ)
+          if (req.tenant.bitrix_webhook) {
+            pushLeadToBitrix(req.tenant, c, transcript, sid)
+              .then(lid => console.log('[bitrix] lead created id=' + lid + ' tenant=' + req.tenant.slug))
+              .catch(e => console.error('[bitrix] lead push failed (' + req.tenant.slug + '):', e.message));
+          }
         }
       }
     }
