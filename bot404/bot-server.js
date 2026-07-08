@@ -742,7 +742,22 @@ function filterHistoryForLLM(history) {
   return (history || []).filter(m => !(m.role === 'assistant' && TEMPLATE_FRAGMENTS_RE.test(String(m.content || ''))));
 }
 
+// Единый предохранитель: для тенанта с кастомным промптом НИ ОДИН ответ не должен
+// содержать бренд 404ai (наследие однотенантной Аиши в fallback-путях). Перехватываем
+// ВСЕ res.json этого хендлера и скрабим reply — что бы ни произвёл любой путь.
+const TENANT_LEAK_RE = /404\s?ai|@404ai|echolytics|phonex\b/i;
 app.post('/api/sales-chat', resolveTenant, async (req, res) => {
+  if (req.tenant && req.tenant.system_prompt) {
+    const _origJson = res.json.bind(res);
+    res.json = (obj) => {
+      if (obj && typeof obj.reply === 'string' && TENANT_LEAK_RE.test(obj.reply)) {
+        console.warn('[tenant-leak] 404ai в ответе тенанта ' + req.tenant.slug + ' → заменён. Было: ' + obj.reply.slice(0, 140));
+        obj.reply = 'Секунду — уточните, пожалуйста, ваш вопрос, и я помогу разобраться.';
+        obj._scrubbed = true;
+      }
+      return _origJson(obj);
+    };
+  }
   try {
     const tid = req.tenant.tenant_id;
     let sid = String((req.body && req.body.session_id) || '').trim();
