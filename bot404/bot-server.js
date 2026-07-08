@@ -791,7 +791,9 @@ app.post('/api/sales-chat', resolveTenant, async (req, res) => {
       return res.json({ session_id: sid, reply: greeting, tenant: req.tenant.slug });
     }
     const ip = (req.headers['x-real-ip'] || String(req.headers['x-forwarded-for'] || '').split(',')[0] || req.socket.remoteAddress || 'x').trim();
-    if (rateLimited(ip)) {
+    // Анти-спам rateLimited отключён для тенантов с кастомным промптом (напр. Авито-бот):
+    // там каждый клиент отдельный, троттлить нельзя — иначе бот замолкает на реальном клиенте.
+    if (!req.tenant.system_prompt && rateLimited(ip)) {
       const RL = 'Вы пишете очень часто — давайте сделаем паузу на минутку. А пока оставьте телефон или email, и менеджер свяжется с вами лично.';
       await pool.query("INSERT INTO bot_404_log(session_id,direction,text,tenant_id) VALUES($1,'out',$2,$3)", [sid, RL, tid]);
       return res.json({ session_id: sid, reply: RL });
@@ -846,25 +848,29 @@ app.post('/api/sales-chat', resolveTenant, async (req, res) => {
     }
 
     // ── P2-4: эскалация на оператора ─────────────────────────────────────────
-    const factsHasContact = !!(existingFacts && (existingFacts.contact_email || existingFacts.contact_phone || existingFacts.contact_telegram));
-    const escReason = shouldEscalate(history, msg, factsHasContact);
-    if (escReason) {
-      const escReply = escalationReply(escReason, history);
-      if (escReply) {
-        await pool.query("INSERT INTO bot_404_log(session_id,direction,text,tenant_id) VALUES($1,'out',$2,$3)", [sid, escReply, tid]);
-        return res.json({ session_id: sid, reply: escReply, _escalated: escReason });
+    // Только для 404ai/aisha: escalationReply содержит хардкод ap@404ai.ru.
+    // У тенантов с кастомным промптом эскалацию (и «ты бот?») обрабатывает сам промпт.
+    if (!req.tenant.system_prompt) {
+      const factsHasContact = !!(existingFacts && (existingFacts.contact_email || existingFacts.contact_phone || existingFacts.contact_telegram));
+      const escReason = shouldEscalate(history, msg, factsHasContact);
+      if (escReason) {
+        const escReply = escalationReply(escReason, history);
+        if (escReply) {
+          await pool.query("INSERT INTO bot_404_log(session_id,direction,text,tenant_id) VALUES($1,'out',$2,$3)", [sid, escReply, tid]);
+          return res.json({ session_id: sid, reply: escReply, _escalated: escReason });
+        }
       }
     }
 
     // router_only: дневной токен-бюджет исчерпан — LLM не вызываем, отдаём fallback
     if (lim.action === 'router_only') {
-      const fallback = 'Сегодня нагрузка превышена — могу ответить только на типовые вопросы. Оставьте телефон или Telegram, менеджер свяжется и ответит подробно. Или напишите на ap@404ai.ru.';
+      const fallback = 'Сегодня нагрузка превышена — могу ответить только на типовые вопросы. Оставьте телефон или Telegram, менеджер свяжется и ответит подробно.' + (req.tenant.branding_manager_email ? ' Или напишите на ' + req.tenant.branding_manager_email + '.' : '');
       await pool.query("INSERT INTO bot_404_log(session_id,direction,text,tenant_id) VALUES($1,'out',$2,$3)", [sid, fallback, tid]);
       return res.json({ session_id: sid, reply: fallback, _limited: 'daily_tokens' });
     }
     const llmStart = Date.now();
     let partnerBlock = '';
-    const wantsToSignupWeb = /(хочу|как\s+мне|подключите|зарегистрир|присоединит)[^.!?]*партн|партн[её]р[а-я]*[^.!?]*(хочу|стать|подключи|присоедин|регистр)/i.test(userMsg);
+    const wantsToSignupWeb = !req.tenant.system_prompt && /(хочу|как\s+мне|подключите|зарегистрир|присоединит)[^.!?]*партн|партн[её]р[а-я]*[^.!?]*(хочу|стать|подключи|присоедин|регистр)/i.test(userMsg);
     try {
       if (wantsToSignupWeb) {
         const c = detectContact(userMsg);
@@ -889,7 +895,7 @@ app.post('/api/sales-chat', resolveTenant, async (req, res) => {
           partnerBlock = 'Клиент хочет стать партнёром, но не указал email или @telegram. Попроси прислать одним сообщением.';
         }
       }
-      if (!partnerBlock && /(мои\s+лид|сколько\s+у\s+меня\s+лид|мой\s+баланс|баланс\s+партн|моя\s+статистика|статистика\s+по\s+партн|сколько\s+мне\s+начислен|когда\s+выплат|к\s+выплате|выплат[аы]\s+партн|что\s+у\s+меня\s+по\s+партн|история\s+начислен|покажи[^.]*лид|список[^.]*лид|вывед[ие][^.]*лид|детал[ьино][^.]*лид|реф[ \-]?код|реферальн[а-я]+\s+код|реферальн[а-я]+\s+ссылк|мой\s+партн[её]рск[а-я]+\s+код|мой\s+код(?![а-яё])|где\s+(мой|взять)\s+код)/i.test(userMsg)) {
+      if (!partnerBlock && /(мои\s+лид|сколько\s+у\s+меня\s+лид|мой\s+баланс|баланс\s+партн|моя\s+статистика|статистика\s+по\s+партн|сколько\s+мне\s+начислен|когда\s+выплат|к\s+выплате|выплат[аы]\s+партн|что\s+у\s+меня\s+по\s+партн|история\s+начислен|покажи[^.]*лид|список[^.]*лид|вывед[ие][^.]*лид|детал[ьино][^.]*лид|реф[ \-]?код|реферальн[а-я]+\s+код|реферальн[а-я]+\s+ссылк|мой\s+партн[её]рск[а-я]+\s+код|мой\s+код(?![а-яё])|где\s+(мой|взять)\s+код)/i.test(userMsg) && !req.tenant.system_prompt) {
         // Подбираем контакт из истории, если его нет в текущем сообщении (важно для follow-up'ов «А баланс?», «Покажи список»)
         const histText = (history || []).map(h => h.content || '').join(' ');
         const combinedMsg = userMsg + ' ' + histText;
@@ -933,7 +939,11 @@ app.post('/api/sales-chat', resolveTenant, async (req, res) => {
     const factsBlock = buildFactsBlock(facts);
     // RAG для не-aisha тенантов: подтягиваем релевантные чанки из knowledge_base
     const kbContext = isAishaTenant ? '' : await ragSearchKB(userMsg, tid, 5);
-    const out = await generateReply(filterHistoryForLLM(history), userMsg, partnerBlock, factsBlock, req.tenant, kbContext);
+    let out = await generateReply(filterHistoryForLLM(history), userMsg, partnerBlock, factsBlock, req.tenant, kbContext);
+    // flash-lite иногда возвращает пусто — одна повторная попытка перед фоллбэком (лучше живой ответ, чем заглушка)
+    if (!String(out && out.reply || '').trim()) {
+      out = await generateReply(filterHistoryForLLM(history), userMsg, partnerBlock, factsBlock, req.tenant, kbContext);
+    }
     const llmLatency = Date.now() - llmStart;
     // (extractor запускается раньше — после INSERT входящего сообщения, см. строку выше)
     // Active listening — мягкий префикс на эмоционально-окрашенные сообщения.
@@ -942,7 +952,11 @@ app.post('/api/sales-chat', resolveTenant, async (req, res) => {
     const replyTrimmed = String(out.reply || '').trim();
     const looksComplete = /[.!?»"\]]\s*$/.test(replyTrimmed) && replyTrimmed.length >= 30;
     const prefix = looksComplete ? activeListeningPrefix(msg) : '';
-    const finalReply = prefix && !replyTrimmed.startsWith(prefix) ? (prefix + replyTrimmed) : replyTrimmed;
+    let finalReply = prefix && !replyTrimmed.startsWith(prefix) ? (prefix + replyTrimmed) : replyTrimmed;
+    // Страховка: модель иногда возвращает пусто — бот НИКОГДА не молчит (особенно на Авито).
+    if (!finalReply || !finalReply.trim()) {
+      finalReply = 'Подскажите, пожалуйста, чуть подробнее — и я помогу разобраться.';
+    }
     await pool.query("INSERT INTO bot_404_log(session_id,direction,text,tenant_id) VALUES($1,'out',$2,$3)", [sid, finalReply, tid]);
     // usage из generateReply — реальные числа от AItunnel (prompt_tokens, completion_tokens, cost_rub, balance)
     const usage = out.usage || {};
@@ -1414,7 +1428,12 @@ app.post('/api/avito/webhook', async (req, res) => {
     // Полная логика бота — через внутренний вызов sales-chat (session = avito chat_id)
     const rr = await fetch('http://127.0.0.1:' + PORT + '/api/sales-chat', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Tenant-Slug': slug },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Tenant-Slug': slug,
+        // рейт-лимит бакетим по конкретному чату Авито, а не по общему 127.0.0.1
+        'X-Real-IP': 'avito-' + chatId,
+      },
       body: JSON.stringify({ message: text, session_id: 'avito:' + chatId }),
     });
     const data = await rr.json().catch(() => ({}));
