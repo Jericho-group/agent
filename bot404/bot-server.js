@@ -225,7 +225,7 @@ function throttleReply() {
   return 'Слишком много запросов за минуту. Попробуйте через ~30 секунд.';
 }
 function pausedReply() {
-  return 'Сервис временно приостановлен. Свяжитесь с менеджером: ap@404ai.ru.';
+  return 'Сервис временно приостановлен. Пожалуйста, оставьте телефон или напишите чуть позже — с вами свяжутся.';
 }
 
 // ── Phase 5: audit-лог ───────────────────────────────────────────────────────
@@ -471,7 +471,7 @@ async function resolveTenant(req, res, next) {
     if (!tenant.enabled) {
       return res.status(503).json({
         error: 'tenant_disabled',
-        reply: 'Сервис временно недоступен. Свяжитесь с поддержкой 404ai: ap@404ai.ru.',
+        reply: 'Сервис временно недоступен. Пожалуйста, попробуйте позже.',
       });
     }
     req.tenant = tenant;
@@ -864,7 +864,9 @@ app.post('/api/sales-chat', resolveTenant, async (req, res) => {
 
     // router_only: дневной токен-бюджет исчерпан — LLM не вызываем, отдаём fallback
     if (lim.action === 'router_only') {
-      const fallback = 'Сегодня нагрузка превышена — могу ответить только на типовые вопросы. Оставьте телефон или Telegram, менеджер свяжется и ответит подробно.' + (req.tenant.branding_manager_email ? ' Или напишите на ' + req.tenant.branding_manager_email + '.' : '');
+      // manager_email из v_tenant_branding может наследовать дефолт 404ai — не подставляем чужой контакт
+      const _mgrEmail = req.tenant.branding_manager_email && !/404ai/i.test(req.tenant.branding_manager_email) ? req.tenant.branding_manager_email : '';
+      const fallback = 'Сегодня нагрузка превышена — могу ответить только на типовые вопросы. Оставьте телефон или Telegram, менеджер свяжется и ответит подробно.' + (_mgrEmail ? ' Или напишите на ' + _mgrEmail + '.' : '');
       await pool.query("INSERT INTO bot_404_log(session_id,direction,text,tenant_id) VALUES($1,'out',$2,$3)", [sid, fallback, tid]);
       return res.json({ session_id: sid, reply: fallback, _limited: 'daily_tokens' });
     }

@@ -320,7 +320,11 @@ function emotionPreamble(emotion) {
 
 export async function generateReply(history, userMsg, partnerBlock, factsBlock, tenant, kbContext) {
   const usage = { prompt_tokens:0, completion_tokens:0, total_tokens:0, cost_rub:0, balance:null, calls:0, model:null };
-  if (looksLikeInjection(userMsg)) return { draft: '', reply: SAFE_REPLY, usage };
+  if (looksLikeInjection(userMsg)) {
+    // Кастомный тенант не должен отдавать 404ai-заглушку — нейтральный дефлект в его роли.
+    const safe = (tenant && tenant.system_prompt) ? 'Давайте вернёмся к вашему вопросу — я помогу разобраться. О чём речь?' : SAFE_REPLY;
+    return { draft: '', reply: safe, usage };
+  }
   const en = isEnglishMsg(userMsg);
   const langDir = en ? '\n\nIMPORTANT: The client wrote in English. Reply ENTIRELY in fluent English. Use ONLY facts and numbers from the knowledge base/FACTS — never invent figures, percentages or claims; keep numbers identical to the source.' : '';
   const partnerDir = partnerBlock ? ('\n\n=== ДАННЫЕ ПАРТНЁРА (ОБЯЗАТЕЛЬНО используй эти цифры в ответе — это ЕДИНСТВЕННЫЙ источник по лидам/выплатам/балансу клиента; не прощайся и не закрывай диалог пока запрос про партнёрку, даже если он повторяется; если клиент просит «список / покажи / вывести / детально» — ВЫВЕДИ список лидов построчно из блока) ===\n' + partnerBlock + '\n=== /ДАННЫЕ ПАРТНЁРА ===') : '';
