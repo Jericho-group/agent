@@ -366,7 +366,7 @@ async function pushLeadToBitrix(tenant, c, transcript, sid) {
     TITLE: 'Лид с Авито · ' + who,
     NAME: c.name || '',
     SOURCE_ID: tenant.bitrix_source_id || 'WEB',
-    SOURCE_DESCRIPTION: 'Эхо-бот (Авито) · ' + (tenant.name || tenant.slug),
+    SOURCE_DESCRIPTION: 'Авито · ' + (tenant.name || tenant.slug),
     COMMENTS: transcript,
     OPENED: 'Y',
   };
@@ -748,25 +748,34 @@ function filterHistoryForLLM(history) {
 // Единый предохранитель: для тенанта с кастомным промптом НИ ОДИН ответ не должен
 // содержать бренд 404ai (наследие однотенантной Аиши в fallback-путях). Перехватываем
 // ВСЕ res.json этого хендлера и скрабим reply — что бы ни произвёл любой путь.
-const TENANT_LEAK_RE = /404\s?ai|@404ai|echolytics|phonex\b/i;
+const TENANT_LEAK_RE = /404\s?ai|@404ai|echolytics|phonex\b|\borchestra\b|\bcoach\b/i;
 // Утечка/пересказ системного промпта: бот НЕ должен раскрывать свои правила, ограничения,
 // цель или признаваться, что он бот/следует инструкции. Ловим характерные фразы-пересказы.
 const PROMPT_LEAK_RE = /мне\s+запрещено|не\s+могу\s+задавать\s+два|нельзя\s+(?:отправлять|писать)\s+два|по\s+инструкц|мо[ий]\s+(?:инструкц|правил|промпт|ограничен)|систем\w*\s*промпт|признавать[,\s]+что\s+я\s+бот|не\s+признавать|я\s+(?:—\s*)?(?:бот|ии|искусственн|языкова|нейросет)|моя\s+главная\s+цель\s+[—-]\s*получить/i;
+// Внутренние тенанты (им 404ai-бренд корректен). Все прочие — клиенты, скрабятся.
+function isInternalTenant(t) { return !!(t && (t.slug === 'aisha' || t.slug === 'default')); }
+// Единый скраб ответа для клиентских тенантов: убираем 404ai-бренд и пересказ промпта.
+// Используется и на sales-chat (res.json), и на Telegram, и где угодно ещё.
+function scrubTenantReply(tenant, reply) {
+  if (isInternalTenant(tenant) || typeof reply !== 'string' || !reply) return reply;
+  if (TENANT_LEAK_RE.test(reply)) {
+    console.warn('[tenant-leak] 404ai у ' + tenant.slug + ' → заменён: ' + reply.slice(0, 120));
+    return 'Секунду — уточните, пожалуйста, ваш вопрос, и я помогу разобраться.';
+  }
+  if (PROMPT_LEAK_RE.test(reply)) {
+    console.warn('[prompt-leak] пересказ промпта у ' + tenant.slug + ' → заменён: ' + reply.slice(0, 120));
+    return 'Уточните, пожалуйста, ваш вопрос — я помогу разобраться.';
+  }
+  return reply;
+}
 app.post('/api/sales-chat', resolveTenant, async (req, res) => {
-  // Предохранитель на ВСЕ не-404ai тенанты (aisha/default — внутренние, им 404ai можно).
-  if (req.tenant && req.tenant.slug !== 'aisha' && req.tenant.slug !== 'default') {
+  // Предохранитель на ВСЕ клиентские тенанты (aisha/default — внутренние, им 404ai можно).
+  if (!isInternalTenant(req.tenant)) {
     const _origJson = res.json.bind(res);
     res.json = (obj) => {
       if (obj && typeof obj.reply === 'string') {
-        if (TENANT_LEAK_RE.test(obj.reply)) {
-          console.warn('[tenant-leak] 404ai в ответе тенанта ' + req.tenant.slug + ' → заменён. Было: ' + obj.reply.slice(0, 140));
-          obj.reply = 'Секунду — уточните, пожалуйста, ваш вопрос, и я помогу разобраться.';
-          obj._scrubbed = '404';
-        } else if (PROMPT_LEAK_RE.test(obj.reply)) {
-          console.warn('[prompt-leak] пересказ промпта у тенанта ' + req.tenant.slug + ' → заменён. Было: ' + obj.reply.slice(0, 140));
-          obj.reply = 'Я просто помогаю разобраться с банкротством и долгами. Чем могу быть полезна?';
-          obj._scrubbed = 'prompt';
-        }
+        const scrubbed = scrubTenantReply(req.tenant, obj.reply);
+        if (scrubbed !== obj.reply) { obj.reply = scrubbed; obj._scrubbed = true; }
       }
       return _origJson(obj);
     };
@@ -1079,8 +1088,12 @@ async function processTgUpdate(upd, ctx) {
 
   // /start /help — приветствие (берём из branding если есть)
   if (!text || text === '/start' || text === '/help') {
-    const branded = tenant.branding_greeting || ('Я ' + (tenant.branding_bot_name || 'Аиша') + ' из ' + (tenant.branding_brand_name || '404ai') + '. Помогу подобрать решение под ваши задачи и показать, где у вас утекают сделки.\n\nРасскажите коротко — чем занимаетесь и что сейчас с продажами? Или сразу записать вас на короткое демо?');
-    const hi = (userName ? `Здравствуйте, ${userName}! ` : 'Здравствуйте! ') + branded;
+    const _internal = tenant.slug === 'aisha' || tenant.slug === 'default';
+    const branded = tenant.branding_greeting || (_internal
+      ? ('Я ' + (tenant.branding_bot_name || 'Аиша') + ' из ' + (tenant.branding_brand_name || '404ai') + '. Помогу подобрать решение под ваши задачи и показать, где у вас утекают сделки.\n\nРасскажите коротко — чем занимаетесь и что сейчас с продажами? Или сразу записать вас на короткое демо?')
+      : ((tenant.branding_bot_name ? 'Я ' + tenant.branding_bot_name + '. ' : '') + 'Чем могу помочь?'));
+    let hi = (userName ? `Здравствуйте, ${userName}! ` : 'Здравствуйте! ') + branded;
+    hi = scrubTenantReply(tenant, hi);
     await pool.query("INSERT INTO bot_404_log(session_id,direction,text,tenant_id) VALUES($1,'out',$2,$3)", [sid, hi, tid]).catch(() => {});
     await tgSendMessage(token, chatId, hi);
     return;
@@ -1165,14 +1178,17 @@ async function processTgUpdate(upd, ctx) {
     // Возвращающийся клиент — обходим router, идём в LLM с памятью
     const existingFactsTg = await loadFacts(pool, sid).catch(() => null);
     const hasMemoryTg = existingFactsTg && !!(existingFactsTg.industry || existingFactsTg.volume_per_day || existingFactsTg.avg_check_rub || existingFactsTg.current_crm || existingFactsTg.mentioned_pains?.length || existingFactsTg.last_summary);
-    const intent = hasMemoryTg ? null : detectIntent(text);
+    // ТОЛЬКО aisha/default: router/escalation/partner-шорткаты содержат хардкод 404ai.
+    // Клиентские тенанты (в т.ч. на genericPrompt) идут напрямую в LLM со своим брендингом.
+    const isAishaTg = ctx.tenant_slug === 'aisha' || ctx.tenant_slug === 'default';
+    const intent = (hasMemoryTg || !isAishaTg) ? null : detectIntent(text);
     if (intent) {
       const cTg = c || detectContact(text);
       const ctxTg = { hasContact: !!(cTg.phone || cTg.email || cTg.telegram), contactType: cTg.phone ? 'phone' : (cTg.email ? 'email' : (cTg.telegram ? 'telegram' : null)) };
       reply = personalizedReply(intent, history, ctxTg);
     }
-    // P2-4: эскалация на оператора (после router'a)
-    if (!reply) {
+    // P2-4: эскалация на оператора (после router'a) — только для внутренних тенантов
+    if (!reply && isAishaTg) {
       const factsHasContactTg = !!(existingFactsTg && (existingFactsTg.contact_email || existingFactsTg.contact_phone || existingFactsTg.contact_telegram));
       const escReason = shouldEscalate(history, text, factsHasContactTg);
       if (escReason) reply = escalationReply(escReason, history);
@@ -1186,7 +1202,7 @@ async function processTgUpdate(upd, ctx) {
         llmStart = Date.now();
         // Partner-intent: дёргаем Orchestra через docker network — если найден партнёр, прокидываем блок в LLM
         let partnerBlock = '';
-        const wantsToSignup = /(хочу|как\s+мне|подключите|зарегистрир|присоединит)[^.!?]*партн|партн[её]р[а-я]*[^.!?]*(хочу|стать|подключи|присоедин|регистр)/i.test(text);
+        const wantsToSignup = isAishaTg && /(хочу|как\s+мне|подключите|зарегистрир|присоединит)[^.!?]*партн|партн[её]р[а-я]*[^.!?]*(хочу|стать|подключи|присоедин|регистр)/i.test(text);
         try {
           if (wantsToSignup) {
             const c = detectContact(text);
@@ -1211,7 +1227,7 @@ async function processTgUpdate(upd, ctx) {
               partnerBlock = 'Клиент хочет стать партнёром, но контакт не найден ни в сообщении, ни в TG-профиле. Скажи что для заявки нужен email или @telegram, попроси прислать одним сообщением.';
             }
           }
-          if (!partnerBlock && /(мои\s+лид|сколько\s+у\s+меня\s+лид|мой\s+баланс|баланс\s+партн|моя\s+статистика|статистика\s+по\s+партн|сколько\s+мне\s+начислен|когда\s+выплат|к\s+выплате|выплат[аы]\s+партн|что\s+у\s+меня\s+по\s+партн|история\s+начислен|покажи[^.]*лид|список[^.]*лид|вывед[ие][^.]*лид|детал[ьино][^.]*лид|реф[ \-]?код|реферальн[а-я]+\s+код|реферальн[а-я]+\s+ссылк|мой\s+партн[её]рск[а-я]+\s+код|мой\s+код(?![а-яё])|где\s+(мой|взять)\s+код)/i.test(text)) {
+          if (!partnerBlock && isAishaTg && /(мои\s+лид|сколько\s+у\s+меня\s+лид|мой\s+баланс|баланс\s+партн|моя\s+статистика|статистика\s+по\s+партн|сколько\s+мне\s+начислен|когда\s+выплат|к\s+выплате|выплат[аы]\s+партн|что\s+у\s+меня\s+по\s+партн|история\s+начислен|покажи[^.]*лид|список[^.]*лид|вывед[ие][^.]*лид|детал[ьино][^.]*лид|реф[ \-]?код|реферальн[а-я]+\s+код|реферальн[а-я]+\s+ссылк|мой\s+партн[её]рск[а-я]+\s+код|мой\s+код(?![а-яё])|где\s+(мой|взять)\s+код)/i.test(text)) {
             const histTextTg = (history || []).map(h => h.content || '').join(' ');
             const combinedTg = text + ' ' + histTextTg;
             const url = 'http://chatbot_app:8000/internal/partner-stats?session_id=' + encodeURIComponent(sid) + '&message=' + encodeURIComponent(combinedTg);
@@ -1241,10 +1257,10 @@ async function processTgUpdate(upd, ctx) {
         } catch (e) { /* network/timeout — fallback на обычный generateReply */ }
         const facts = await loadFacts(pool, sid);
         const factsBlock = buildFactsBlock(facts);
-        const isAishaTg = ctx.tenant_slug === 'aisha' || ctx.tenant_slug === 'default';
         const kbCtxTg = isAishaTg ? '' : await ragSearchKB(text, tid, 5);
-        const tenantForTg = { slug: ctx.tenant_slug, name: ctx.tenant_slug };
-        const out = await generateReply(filterHistoryForLLM(history), text, partnerBlock, factsBlock, tenantForTg, kbCtxTg);
+        // Передаём ПОЛНЫЙ tenant (с system_prompt и брендингом), а не {slug,name} —
+        // иначе кастомный сценарий клиента и его бренд игнорируются в Telegram.
+        const out = await generateReply(filterHistoryForLLM(history), text, partnerBlock, factsBlock, tenant, kbCtxTg);
         // (extractor запускается раньше — после INSERT входящего, см. начало processTgUpdate)
         maybeUpdateSummary(pool, sid, tid, history.concat([{ role: 'user', content: text }])).catch(() => {});
         const replyTrimmed = String(out.reply || '').trim();
@@ -1265,6 +1281,7 @@ async function processTgUpdate(upd, ctx) {
       }
     }
 
+    reply = scrubTenantReply(tenant, reply); // единый предохранитель 404ai/промпт для клиентских тенантов
     await pool.query("INSERT INTO bot_404_log(session_id,direction,text,tenant_id) VALUES($1,'out',$2,$3)", [sid, reply, tid]).catch(() => {});
     await tgSendMessage(token, chatId, reply);
   } catch (e) {
@@ -1513,7 +1530,8 @@ app.get('/api/widget-config', async (req, res) => {
     if (explicit && /^[a-z0-9][a-z0-9-]{0,40}$/.test(explicit)) slug = explicit;
     else slug = extractSlug((req.headers['referer']||'').replace(/^https?:\/\//,'').split('/')[0], null)
               || extractSlug(req.headers.host, null);
-    if (!slug) slug = 'aisha';  // дефолт для лендинга без host-резолва
+    // НЕ дефолтим на aisha (иначе чужой лендинг покажет 404ai-брендинг) — требуем явный тенант
+    if (!slug) return res.status(400).json({ error: 'tenant_slug_required' });
     const r = await pool.query("SELECT * FROM v_tenant_branding WHERE slug=$1 LIMIT 1", [slug]);
     if (!r.rows.length) return res.status(404).json({ error: 'tenant_not_found' });
     res.set('Cache-Control', 'public, max-age=60');

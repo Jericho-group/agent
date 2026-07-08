@@ -950,10 +950,14 @@ async def bot404_stats(x_admin_token: str = Header(default="")):
     total = await pool.fetchval("SELECT count(*) FROM bot_404_log WHERE tenant_id=$1", tid) or 0
     last24 = await pool.fetchval("SELECT count(*) FROM bot_404_log WHERE tenant_id=$1 AND created_at > now() - interval '24 hours'", tid) or 0
     leads = await pool.fetchval("SELECT count(*) FROM bot_404_leads WHERE tenant_id=$1", tid) or 0
+    # company — из брендинга тенанта, а не хардкод 404ai (иначе клиент видит вендора в своём кабинете)
+    brand = await pool.fetchval("SELECT COALESCE(brand_name, name) FROM v_tenant_branding WHERE tenant_id=$1", tid) or ""
+    bot_nm = await pool.fetchval("SELECT bot_name FROM v_tenant_branding WHERE tenant_id=$1", tid) or ""
+    company = (str(brand) + (" · " + str(bot_nm) if bot_nm else "")).strip(" ·") or "—"
     return {
         "stats": {"status": "online", "active_sessions": sessions, "knowledge_base_docs": 0,
                   "models": {"agent": "gemini-2.5-flash-lite", "router": "gemini-2.5-flash (критик)", "orchestrator": "gemini-2.5-flash"},
-                  "company": "404ai · Аиша"},
+                  "company": company},
         "extStats": {"total_sessions": sessions, "total_messages": total, "messages_24h": last24,
                      "qualified_leads": leads, "escalated": 0, "temperature": {"hot": 0, "warm": 0, "cold": 0}, "intents": []},
     }
