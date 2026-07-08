@@ -70,6 +70,9 @@ const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
   }
 })();
 const ADMIN_NOTIFY_EMAIL = process.env.ADMIN_NOTIFY_EMAIL || 'ap@404ai.ru';
+// База ЛК для ссылок в уведомлениях о лидах (по умолчанию прод; на тесте задаётся через env).
+const ADMIN_BASE_URL = (process.env.ADMIN_BASE_URL || 'https://admin.dirizher404.ru').replace(/\/+$/, '');
+const BOT_BASE_URL   = (process.env.BOT_BASE_URL   || 'https://bot.dirizher404.ru').replace(/\/+$/, '');
 const TG_BOT_TOKEN  = process.env.TG_BOT_TOKEN || '';
 const TG_WEBHOOK_SECRET = process.env.TG_WEBHOOK_SECRET || '';  // fail-fast выше валидирует
 const REDIS_URL     = process.env.REDIS_URL || 'redis://chatbot_redis:6379';
@@ -175,7 +178,7 @@ async function maybeSendBudgetAlert(tenant, kind, used, limit, periodKey) {
     (bucket === '100' ? '⛔ Лимит исчерпан. Бот переключился на router-only / paused режим.\n' :
      bucket === '95'  ? '⚠️ До исчерпания осталось <5%.\n' :
                         'Информационно: пройдена отметка 80%.\n') +
-    `\nУправление лимитами: https://bot.217-149-25-34.sslip.io/admin/root`;
+    `\nУправление лимитами: ` + BOT_BASE_URL + `/admin/root`;
   sendAdminNotify(subj, body).catch(() => {});
 }
 
@@ -791,7 +794,7 @@ app.post('/api/sales-chat', resolveTenant, async (req, res) => {
         const transcript = (history.map(x => (x.role === 'user' ? 'Клиент: ' : 'Бот: ') + x.content).join('\n') + '\nКлиент: ' + msg).slice(0, 2000);
         const ins = await pool.query("INSERT INTO bot_404_leads(session_id,phone,email,telegram,note,tenant_id) SELECT $1,$2,$3,$4,$5,$6 WHERE NOT EXISTS (SELECT 1 FROM bot_404_leads WHERE session_id=$1 AND tenant_id=$6 AND COALESCE(phone,'x')=COALESCE($2,'x') AND COALESCE(email,'y')=COALESCE($3,'y') AND COALESCE(telegram,'z')=COALESCE($4,'z')) RETURNING id", [sid, c.phone, c.email, c.telegram, transcript, tid]).catch(() => ({ rows: [] }));
         if (ins && ins.rows && ins.rows.length) {
-          const lkLink = 'https://217-149-25-34.sslip.io/admin?session=' + encodeURIComponent(sid);
+          const lkLink = ADMIN_BASE_URL + '/admin?session=' + encodeURIComponent(sid);
           sendAdminNotify(
             "Новый лид [" + req.tenant.slug + "]",
             "Тенант: " + req.tenant.name + "\nТелефон: " + (c.phone || "-") + "\nEmail: " + (c.email || "-") + "\nTelegram: " + (c.telegram || "-") +
@@ -1120,7 +1123,7 @@ async function processTgUpdate(upd, ctx) {
         [sid, c.phone, c.email, c.telegram, 'Telegram: ' + (userName || tgUsername || chatId) + '\n' + text.slice(0, 1500), tid]
       ).catch(() => ({ rows: [] }));
       if (ins.rows?.length) {
-        const lkLink = 'https://217-149-25-34.sslip.io/admin?session=' + encodeURIComponent(sid);
+        const lkLink = ADMIN_BASE_URL + '/admin?session=' + encodeURIComponent(sid);
         sendAdminNotify(
           'Новый лид из Telegram',
           'TG: ' + (tgUsername || chatId) +
@@ -1481,7 +1484,7 @@ app.get('/api/telegram-setup', async (req, res) => {
   if (!adminAuth(req, res)) return;
   if (!TG_BOT_TOKEN) return res.status(400).json({ error: 'TG_BOT_TOKEN not set' });
   const base = 'https://jolly-union-66fa.gbefhberh.workers.dev/bot' + TG_BOT_TOKEN;
-  const webhookUrl = (req.query.url || ('https://bot.217-149-25-34.sslip.io/api/telegram-webhook?secret=' + TG_WEBHOOK_SECRET));
+  const webhookUrl = (req.query.url || (BOT_BASE_URL + '/api/telegram-webhook?secret=' + TG_WEBHOOK_SECRET));
   try {
     const setRes  = await (await fetch(base + '/setWebhook', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ url: webhookUrl, allowed_updates: ['message','edited_message'], drop_pending_updates: true }) })).json();
     const infoRes = await (await fetch(base + '/getWebhookInfo')).json();
