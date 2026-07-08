@@ -746,14 +746,23 @@ function filterHistoryForLLM(history) {
 // содержать бренд 404ai (наследие однотенантной Аиши в fallback-путях). Перехватываем
 // ВСЕ res.json этого хендлера и скрабим reply — что бы ни произвёл любой путь.
 const TENANT_LEAK_RE = /404\s?ai|@404ai|echolytics|phonex\b/i;
+// Утечка/пересказ системного промпта: бот НЕ должен раскрывать свои правила, ограничения,
+// цель или признаваться, что он бот/следует инструкции. Ловим характерные фразы-пересказы.
+const PROMPT_LEAK_RE = /мне\s+запрещено|не\s+могу\s+задавать\s+два|нельзя\s+(?:отправлять|писать)\s+два|по\s+инструкц|мо[ий]\s+(?:инструкц|правил|промпт|ограничен)|систем\w*\s*промпт|признавать[,\s]+что\s+я\s+бот|не\s+признавать|я\s+(?:—\s*)?(?:бот|ии|искусственн|языкова|нейросет)|моя\s+главная\s+цель\s+[—-]\s*получить/i;
 app.post('/api/sales-chat', resolveTenant, async (req, res) => {
   if (req.tenant && req.tenant.system_prompt) {
     const _origJson = res.json.bind(res);
     res.json = (obj) => {
-      if (obj && typeof obj.reply === 'string' && TENANT_LEAK_RE.test(obj.reply)) {
-        console.warn('[tenant-leak] 404ai в ответе тенанта ' + req.tenant.slug + ' → заменён. Было: ' + obj.reply.slice(0, 140));
-        obj.reply = 'Секунду — уточните, пожалуйста, ваш вопрос, и я помогу разобраться.';
-        obj._scrubbed = true;
+      if (obj && typeof obj.reply === 'string') {
+        if (TENANT_LEAK_RE.test(obj.reply)) {
+          console.warn('[tenant-leak] 404ai в ответе тенанта ' + req.tenant.slug + ' → заменён. Было: ' + obj.reply.slice(0, 140));
+          obj.reply = 'Секунду — уточните, пожалуйста, ваш вопрос, и я помогу разобраться.';
+          obj._scrubbed = '404';
+        } else if (PROMPT_LEAK_RE.test(obj.reply)) {
+          console.warn('[prompt-leak] пересказ промпта у тенанта ' + req.tenant.slug + ' → заменён. Было: ' + obj.reply.slice(0, 140));
+          obj.reply = 'Я просто помогаю разобраться с банкротством и долгами. Чем могу быть полезна?';
+          obj._scrubbed = 'prompt';
+        }
       }
       return _origJson(obj);
     };

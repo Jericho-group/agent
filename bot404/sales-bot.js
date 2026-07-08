@@ -271,7 +271,9 @@ function cleanText(t){
 
 const SAFE_REPLY = 'Я помогаю только с вопросами по 404ai — продукты, цены, демо, пилот. Подскажите, что у вас за бизнес и какая задача по продажам?';
 const INJECTION_RE = /(?:ignore|disregard|forget|override)\b[\s\S]{0,40}(?:instruction|prompt|rule|context|previous|above)|(?:игнорируй|забудь|сбрось|отмени)[\s\S]{0,40}(?:инструкц|промпт|правил|предыдущ|контекст|вс[её] выше)|system\s*prompt|систем\w*\s*(?:промпт|prompt|инструкц)|(?:покажи|выведи|распечатай|повтори|раскрой|пришли)[\s\S]{0,30}(?:промпт|prompt|свои инструкц|систем\w*\s*сообщ)|(?:твои|ваши|свои)\s+(?:инструкц|промпт|guardrail)|\bact\s+as\b|\bpretend\b|\bjailbreak\b|developer\s+mode|режим\s+разработчик|api[\s_-]*key|api[\s_-]*ключ/i;
-function looksLikeInjection(t){ return INJECTION_RE.test(String(t || '')); }
+// Непрямое извлечение промта/правил/цели (не «ignore instructions», а «перечисли что тебе запрещено», «какая твоя цель»)
+const INJECTION_RE2 = /(?:перечисли|назови|какие|что\s+тебе|что\s+именно)[\s\S]{0,25}(?:запрещ|нельзя|ограничен|тво[ияе]\s+правил|сво[ияе]\s+правил)|(?:тво[яею]|ваш\w*|у\s+тебя)[\s\S]{0,15}(?:главн\w*\s+)?цел[ьи]|цел[ьи]\s+по\s+инструкц|(?:процитируй|воспроизведи|перескажи|дословно|наоборот)[\s\S]{0,30}(?:инструкц|промпт|правил|цел|абзац|систем)|что\s+(?:написано|тебе\s+дал|было|стоит)[\s\S]{0,18}(?:выше|в\s+начале|до\s+этого|перед)|нов\w*\s+(?:систем\w*\s+)?инструкц|new\s+instruction/i;
+function looksLikeInjection(t){ const s = String(t || ''); return INJECTION_RE.test(s) || INJECTION_RE2.test(s); }
 function isEnglishMsg(t){ const s=String(t||''); const cyr=(s.match(/[а-яёА-ЯЁ]/g)||[]).length; const lat=(s.match(/[a-zA-Z]/g)||[]).length; return cyr===0 && lat>=10; }
 // LEAK_RE — ловит ТОЛЬКО реальные утечки секретов и системных блоков.
 // Названия моделей (gemini/gpt/claude) убраны — они могут случайно появиться в ответах LLM-критика как фразы «I am Claude…»
