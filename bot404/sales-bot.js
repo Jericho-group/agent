@@ -323,8 +323,9 @@ function emotionPreamble(emotion) {
 export async function generateReply(history, userMsg, partnerBlock, factsBlock, tenant, kbContext) {
   const usage = { prompt_tokens:0, completion_tokens:0, total_tokens:0, cost_rub:0, balance:null, calls:0, model:null };
   if (looksLikeInjection(userMsg)) {
-    // Кастомный тенант не должен отдавать 404ai-заглушку — нейтральный дефлект в его роли.
-    const safe = (tenant && tenant.system_prompt) ? 'Давайте вернёмся к вашему вопросу — я помогу разобраться. О чём речь?' : SAFE_REPLY;
+    // 404ai-заглушку (SAFE_REPLY) отдаём только aisha/default; остальным — нейтральный дефлект.
+    const _isAishaT = tenant && (tenant.slug === 'aisha' || tenant.slug === 'default');
+    const safe = _isAishaT ? SAFE_REPLY : 'Давайте вернёмся к вашему вопросу — я помогу разобраться. О чём речь?';
     return { draft: '', reply: safe, usage };
   }
   const en = isEnglishMsg(userMsg);

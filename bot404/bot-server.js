@@ -750,7 +750,8 @@ const TENANT_LEAK_RE = /404\s?ai|@404ai|echolytics|phonex\b/i;
 // цель или признаваться, что он бот/следует инструкции. Ловим характерные фразы-пересказы.
 const PROMPT_LEAK_RE = /мне\s+запрещено|не\s+могу\s+задавать\s+два|нельзя\s+(?:отправлять|писать)\s+два|по\s+инструкц|мо[ий]\s+(?:инструкц|правил|промпт|ограничен)|систем\w*\s*промпт|признавать[,\s]+что\s+я\s+бот|не\s+признавать|я\s+(?:—\s*)?(?:бот|ии|искусственн|языкова|нейросет)|моя\s+главная\s+цель\s+[—-]\s*получить/i;
 app.post('/api/sales-chat', resolveTenant, async (req, res) => {
-  if (req.tenant && req.tenant.system_prompt) {
+  // Предохранитель на ВСЕ не-404ai тенанты (aisha/default — внутренние, им 404ai можно).
+  if (req.tenant && req.tenant.slug !== 'aisha' && req.tenant.slug !== 'default') {
     const _origJson = res.json.bind(res);
     res.json = (obj) => {
       if (obj && typeof obj.reply === 'string') {
@@ -872,9 +873,9 @@ app.post('/api/sales-chat', resolveTenant, async (req, res) => {
     }
 
     // ── P2-4: эскалация на оператора ─────────────────────────────────────────
-    // Только для 404ai/aisha: escalationReply содержит хардкод ap@404ai.ru.
-    // У тенантов с кастомным промптом эскалацию (и «ты бот?») обрабатывает сам промпт.
-    if (!req.tenant.system_prompt) {
+    // ТОЛЬКО для aisha/default: escalationReply содержит хардкод ap@404ai.ru.
+    // Остальные тенанты (PRM на genericPrompt, кастомные) эскалацию ведут через LLM со своим брендингом.
+    if (isAishaTenant) {
       const factsHasContact = !!(existingFacts && (existingFacts.contact_email || existingFacts.contact_phone || existingFacts.contact_telegram));
       const escReason = shouldEscalate(history, msg, factsHasContact);
       if (escReason) {
@@ -896,7 +897,7 @@ app.post('/api/sales-chat', resolveTenant, async (req, res) => {
     }
     const llmStart = Date.now();
     let partnerBlock = '';
-    const wantsToSignupWeb = !req.tenant.system_prompt && /(хочу|как\s+мне|подключите|зарегистрир|присоединит)[^.!?]*партн|партн[её]р[а-я]*[^.!?]*(хочу|стать|подключи|присоедин|регистр)/i.test(userMsg);
+    const wantsToSignupWeb = isAishaTenant && /(хочу|как\s+мне|подключите|зарегистрир|присоединит)[^.!?]*партн|партн[её]р[а-я]*[^.!?]*(хочу|стать|подключи|присоедин|регистр)/i.test(userMsg);
     try {
       if (wantsToSignupWeb) {
         const c = detectContact(userMsg);
@@ -921,7 +922,7 @@ app.post('/api/sales-chat', resolveTenant, async (req, res) => {
           partnerBlock = 'Клиент хочет стать партнёром, но не указал email или @telegram. Попроси прислать одним сообщением.';
         }
       }
-      if (!partnerBlock && /(мои\s+лид|сколько\s+у\s+меня\s+лид|мой\s+баланс|баланс\s+партн|моя\s+статистика|статистика\s+по\s+партн|сколько\s+мне\s+начислен|когда\s+выплат|к\s+выплате|выплат[аы]\s+партн|что\s+у\s+меня\s+по\s+партн|история\s+начислен|покажи[^.]*лид|список[^.]*лид|вывед[ие][^.]*лид|детал[ьино][^.]*лид|реф[ \-]?код|реферальн[а-я]+\s+код|реферальн[а-я]+\s+ссылк|мой\s+партн[её]рск[а-я]+\s+код|мой\s+код(?![а-яё])|где\s+(мой|взять)\s+код)/i.test(userMsg) && !req.tenant.system_prompt) {
+      if (!partnerBlock && /(мои\s+лид|сколько\s+у\s+меня\s+лид|мой\s+баланс|баланс\s+партн|моя\s+статистика|статистика\s+по\s+партн|сколько\s+мне\s+начислен|когда\s+выплат|к\s+выплате|выплат[аы]\s+партн|что\s+у\s+меня\s+по\s+партн|история\s+начислен|покажи[^.]*лид|список[^.]*лид|вывед[ие][^.]*лид|детал[ьино][^.]*лид|реф[ \-]?код|реферальн[а-я]+\s+код|реферальн[а-я]+\s+ссылк|мой\s+партн[её]рск[а-я]+\s+код|мой\s+код(?![а-яё])|где\s+(мой|взять)\s+код)/i.test(userMsg) && isAishaTenant) {
         // Подбираем контакт из истории, если его нет в текущем сообщении (важно для follow-up'ов «А баланс?», «Покажи список»)
         const histText = (history || []).map(h => h.content || '').join(' ');
         const combinedMsg = userMsg + ' ' + histText;
