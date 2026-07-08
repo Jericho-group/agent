@@ -368,6 +368,9 @@ function normalizePhone(raw) {
   if (d.length === 11 && (d[0] === '8' || d[0] === '7')) d = '7' + d.slice(1);
   else if (d.length === 10) d = '7' + d;
   else return null;
+  const nat = d.slice(1); // 10 цифр без кода страны
+  // отбрасываем очевидные фейки: мало разных цифр (1111111111, 9999999999, 9111111111 и т.п.)
+  if (new Set(nat).size < 4) return null;
   return '+' + d;
 }
 const EMAIL_RE = /[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/;
