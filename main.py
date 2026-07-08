@@ -562,7 +562,7 @@ async def team_add(body: _AddUserBody, x_admin_token: str = Header(default="")):
         if "duplicate" in str(e).lower():
             raise HTTPException(status_code=409, detail="Такой email уже есть в команде")
         raise
-    await _audit("team.add", {"id": uid, "email": body.email, "role": body.role})
+    await _audit("team.add", {"id": uid, "email": body.email, "role": body.role}, tid=tid)
     return {"ok": True, "id": uid}
 
 
@@ -578,7 +578,7 @@ async def team_delete(user_id: int, x_admin_token: str = Header(default="")):
     )
     if not deleted:
         raise HTTPException(status_code=404, detail="not found or protected")
-    await _audit("team.delete", {"id": user_id})
+    await _audit("team.delete", {"id": user_id}, tid=tid)
     return {"ok": True}
 
 
@@ -1013,7 +1013,10 @@ async def upload_knowledge(file: UploadFile = File(...), x_admin_token: str = He
     conn = _kb_conn(); conn.autocommit = True
     inserted = 0
     for item in data:
-        doc_id = str(item.get("id") or f"upload-{tid}-{inserted}")
+        # Изоляция тенантов: id — глобальный текстовый PK. Без префикса одинаковый
+        # item.id у двух тенантов (напр. "about_001") затрёт чужую статью через ON CONFLICT.
+        raw_id = str(item.get("id") or f"upload-{tid}-{inserted}")
+        doc_id = raw_id if raw_id.startswith(f"{tid}::") else f"{tid}::{raw_id}"
         text = item.get("content") or item.get("text") or ""
         if not text: continue
         emb_resp = client.embeddings.create(model=_os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small"), input=text)
@@ -1025,7 +1028,8 @@ async def upload_knowledge(file: UploadFile = File(...), x_admin_token: str = He
                    ON CONFLICT (id) DO UPDATE SET
                      content=EXCLUDED.content, embedding=EXCLUDED.embedding,
                      category=EXCLUDED.category, title=EXCLUDED.title, source=EXCLUDED.source,
-                     tenant_id=EXCLUDED.tenant_id, updated_at=now()""",
+                     tenant_id=EXCLUDED.tenant_id, updated_at=now()
+                   WHERE knowledge_base.tenant_id = EXCLUDED.tenant_id""",
                 (doc_id, text, emb, item.get("category"), item.get("title"), item.get("source"), tid),
             )
         inserted += 1
@@ -1039,7 +1043,9 @@ async def list_knowledge(category: str | None = None, search: str | None = None,
     from knowledge.vector_store import _get_conn as _kb_conn
     import psycopg2.extras as _pgx
     conn = _kb_conn()
-    conditions = ["(tenant_id = %s OR tenant_id IS NULL)"]
+    # Изоляция тенантов: показываем ТОЛЬКО статьи своего тенанта (как и search_knowledge).
+    # Раньше был "OR tenant_id IS NULL" — легаси-строки без владельца светились бы всем.
+    conditions = ["tenant_id = %s"]
     params = [tid]
     if category:
         conditions.append("category = %s"); params.append(category)
@@ -1326,10 +1332,16 @@ _TENANT_SLUG = "aisha"  # hardcoded scope для acc404_login (в будущем
 
 
 # ── Phase 5: audit log helper ────────────────────────────────────────────────
-async def _audit(action: str, payload: dict | None, slug: str = "aisha", actor_email: str = "tenant"):
+async def _audit(action: str, payload: dict | None, slug: str | None = None, actor_email: str = "tenant", tid: int | None = None):
     try:
         pool = await _b404_pool()
-        tid = await pool.fetchval("SELECT id FROM tenants WHERE slug=$1", slug)
+        # Изоляция тенантов: пишем в аудит-лог ИМЕННО того тенанта, кто совершил действие.
+        # Раньше при отсутствии slug дефолт был "aisha" → чужие действия (team/branding/tg_bot)
+        # писались в аудит Аиши и светились в её ЛК. Теперь: есть tid — берём его; иначе slug; иначе не пишем.
+        if tid is None:
+            if not slug:
+                return
+            tid = await pool.fetchval("SELECT id FROM tenants WHERE slug=$1", slug)
         if tid is None:
             return
         import json as _json
@@ -1411,7 +1423,7 @@ async def set_branding(body: _BrandingBody, x_admin_token: str = Header(default=
     sets.append("updated_at=now()")
     params.append(tid)
     await pool.execute(f"UPDATE tenant_branding SET {', '.join(sets)} WHERE tenant_id=${i}", *params)
-    await _audit("branding.update", {k: v for k, v in data.items() if v is not None})
+    await _audit("branding.update", {k: v for k, v in data.items() if v is not None}, tid=tid)
     return {"ok": True}
 
 
@@ -1525,7 +1537,7 @@ async def add_tg_bot(body: _TgBotBody, x_admin_token: str = Header(default="")):
                VALUES($1, $2, $3, $4, true) RETURNING id""",
             tid_row["id"], token, me.get("id"), ("@" + me["username"]) if me.get("username") else None,
         )
-    await _audit("tg_bot.add", {"id": bot_id, "username": me.get("username")})
+    await _audit("tg_bot.add", {"id": bot_id, "username": me.get("username")}, tid=tid)
     await _publish_change("tg-bots-changed")
     return {"ok": True, "id": bot_id, "bot_username": ("@" + me["username"]) if me.get("username") else None,
             "hot_reload": True}
@@ -1542,7 +1554,7 @@ async def toggle_tg_bot(bot_id: int, x_admin_token: str = Header(default="")):
     )
     if new_state is None:
         raise HTTPException(status_code=404, detail="bot not found")
-    await _audit("tg_bot.toggle", {"id": bot_id, "enabled": new_state})
+    await _audit("tg_bot.toggle", {"id": bot_id, "enabled": new_state}, tid=tid)
     await _publish_change("tg-bots-changed")
     return {"ok": True, "enabled": new_state, "hot_reload": True}
 
@@ -1557,7 +1569,7 @@ async def delete_tg_bot(bot_id: int, x_admin_token: str = Header(default="")):
     )
     if not deleted:
         raise HTTPException(status_code=404, detail="bot not found")
-    await _audit("tg_bot.delete", {"id": bot_id})
+    await _audit("tg_bot.delete", {"id": bot_id}, tid=tid)
     await _publish_change("tg-bots-changed")
     return {"ok": True, "hot_reload": True}
 
