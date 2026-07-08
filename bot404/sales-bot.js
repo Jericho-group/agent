@@ -359,10 +359,20 @@ export async function generateReply(history, userMsg, partnerBlock, factsBlock, 
   }
   return { draft, reply: stripYesPrefix(safetyScrub(cleanText(refined))), usage };
 }
-const PHONE_RE = /(?:\+?7|8)?[\s\-(]*\d{3}[\s\-)]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}/;
+// Код страны ОБЯЗАТЕЛЕН в первой альтернативе (иначе ведущий пробел съедал «8» и терял цифру);
+// вторая альтернатива — голый мобильный 9XXXXXXXXX. Нормализуем ниже в +7XXXXXXXXXX.
+const PHONE_RE = /(?:\+7|8)[\s\-(]*\d{3}[\s)\-]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}|9\d{9}/;
+function normalizePhone(raw) {
+  if (!raw) return null;
+  let d = String(raw).replace(/\D/g, '');
+  if (d.length === 11 && (d[0] === '8' || d[0] === '7')) d = '7' + d.slice(1);
+  else if (d.length === 10) d = '7' + d;
+  else return null;
+  return '+' + d;
+}
 const EMAIL_RE = /[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/;
 const TG_RE = /(?:^|\s)@([a-zA-Z0-9_]{3,31})/;
-export function detectContact(text) { const t = String(text || ''); const m = t.match(TG_RE); return { phone: (t.match(PHONE_RE) || [])[0] || null, email: (t.match(EMAIL_RE) || [])[0] || null, telegram: m ? ('@' + m[1]) : null }; }
+export function detectContact(text) { const t = String(text || ''); const m = t.match(TG_RE); return { phone: normalizePhone((t.match(PHONE_RE) || [])[0]), email: (t.match(EMAIL_RE) || [])[0] || null, telegram: m ? ('@' + m[1]) : null }; }
 
 if (process.argv.includes('test')) {
   (async () => {
