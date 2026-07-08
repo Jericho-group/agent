@@ -330,7 +330,8 @@ async function loadTenant(slug) {
   const r = await pool.query(
     `SELECT l.tenant_id, l.slug, l.name, l.enabled, l.plan_code, l.model, l.rpm_limit, l.daily_tokens_limit, l.monthly_budget_rub, l.allowed_models,
             b.greeting AS branding_greeting, b.bot_name AS branding_bot_name, b.brand_name AS branding_brand_name, b.role_subtitle AS branding_role_subtitle, b.manager_email AS branding_manager_email,
-            i.system_prompt, i.bitrix_webhook, i.bitrix_source_id, i.bitrix_assigned_by
+            i.system_prompt, i.bitrix_webhook, i.bitrix_source_id, i.bitrix_assigned_by,
+            i.avito_client_id, i.avito_client_secret, i.avito_user_id
      FROM v_tenant_effective_limits l
      LEFT JOIN v_tenant_branding b ON b.tenant_id = l.tenant_id
      LEFT JOIN tenant_integrations i ON i.tenant_id = l.tenant_id
@@ -371,6 +372,50 @@ async function pushLeadToBitrix(tenant, c, transcript, sid) {
   if (c.telegram) fields.IM    = [{ VALUE: c.telegram, VALUE_TYPE: 'TELEGRAM' }];
   if (tenant.bitrix_assigned_by) fields.ASSIGNED_BY_ID = tenant.bitrix_assigned_by;
   return bitrixCall(tenant.bitrix_webhook, 'crm.lead.add', { fields, params: { REGISTER_SONET_EVENT: 'Y' } });
+}
+
+// ── Avito Messenger коннектор ────────────────────────────────────────────────
+// Креды на тенант: avito_client_id / avito_client_secret / avito_user_id.
+// Токен кэшируем на client_id (живёт ~24ч).
+const _avitoTokens = new Map();
+async function avitoToken(clientId, clientSecret) {
+  const cached = _avitoTokens.get(clientId);
+  if (cached && cached.exp > Date.now() + 120000) return cached.token;
+  const r = await fetch('https://api.avito.ru/token/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'client_credentials', client_id: clientId, client_secret: clientSecret }).toString(),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!d.access_token) throw new Error('avito token fail: ' + JSON.stringify(d).slice(0, 200));
+  _avitoTokens.set(clientId, { token: d.access_token, exp: Date.now() + (d.expires_in || 86400) * 1000 });
+  return d.access_token;
+}
+
+async function avitoSend(tenant, chatId, text) {
+  const token = await avitoToken(tenant.avito_client_id, tenant.avito_client_secret);
+  const uid = tenant.avito_user_id;
+  const r = await fetch(`https://api.avito.ru/messenger/v1/accounts/${uid}/chats/${encodeURIComponent(chatId)}/messages`, {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: { text: String(text).slice(0, 2000) }, type: 'text' }),
+  });
+  if (!r.ok) throw new Error('avito send HTTP ' + r.status + ' ' + (await r.text().catch(() => '')).slice(0, 200));
+  return r.json().catch(() => ({}));
+}
+
+// account user_id -> tenant slug (кэш 60с)
+const _avitoTenantCache = new Map();
+async function tenantSlugByAvitoUser(userId) {
+  const key = String(userId);
+  const c = _avitoTenantCache.get(key);
+  if (c && c.exp > Date.now()) return c.slug;
+  const r = await pool.query(
+    'SELECT t.slug FROM tenant_integrations i JOIN tenants t ON t.id = i.tenant_id WHERE i.avito_user_id = $1 AND t.enabled = true LIMIT 1',
+    [key]);
+  const slug = r.rows[0]?.slug || null;
+  _avitoTenantCache.set(key, { slug, exp: Date.now() + 60000 });
+  return slug;
 }
 
 const EMBED_KEY = process.env.OPENAI_API_KEY || process.env.BOT_LLM_KEY || '';
@@ -1344,6 +1389,46 @@ async function tgStopBotById(botRowId) {
     if (ctrl.token === token) { ctrl.stop = true; tgPollers.delete(key); break; }
   }
 }
+
+// ── Avito webhook: входящее сообщение → бот → ответ в Авито ───────────────────
+// Avito шлёт сюда события мессенджера (messenger/v3). Отвечаем 200 сразу,
+// обработку делаем асинхронно. Логику ответа переиспользуем через внутренний
+// вызов /api/sales-chat (память, лид, Bitrix — как у виджета).
+app.post('/api/avito/webhook', async (req, res) => {
+  res.json({ ok: true }); // быстрый ACK — Avito ретраит на медленный ответ
+  try {
+    const body = req.body || {};
+    const p = body.payload || {};
+    if (p.type !== 'message') return;
+    const v = p.value || {};
+    const chatId = v.chat_id;
+    const accountId = v.user_id;                 // аккаунт-получатель (наш бот-аккаунт)
+    const authorId = v.author_id;                // кто написал
+    const text = (v.content && v.content.text) ? String(v.content.text).trim() : '';
+    if (!chatId || !text) return;
+    if (String(authorId) === String(accountId)) return;  // игнор собственных исходящих (эхо)
+
+    const slug = await tenantSlugByAvitoUser(accountId);
+    if (!slug) { console.warn('[avito] нет тенанта для account_id=' + accountId); return; }
+
+    // Полная логика бота — через внутренний вызов sales-chat (session = avito chat_id)
+    const rr = await fetch('http://127.0.0.1:' + PORT + '/api/sales-chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Tenant-Slug': slug },
+      body: JSON.stringify({ message: text, session_id: 'avito:' + chatId }),
+    });
+    const data = await rr.json().catch(() => ({}));
+    const reply = data && data.reply;
+    if (reply && String(reply).trim()) {
+      const t = await loadTenant(slug);
+      if (!t || !t.avito_client_id) { console.warn('[avito] у тенанта ' + slug + ' нет avito-кредов'); return; }
+      await avitoSend(t, chatId, reply);
+      console.log('[avito] ответ отправлен chat=' + chatId + ' tenant=' + slug + ' len=' + reply.length);
+    }
+  } catch (e) {
+    console.error('[avito] webhook error:', e.message);
+  }
+});
 
 app.get('/api/telegram-setup', async (req, res) => {
   // Утилита для регистрации/проверки webhook. Защищена admin_token.
