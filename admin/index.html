@@ -1636,12 +1636,12 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
           </div>
         </div>
 
-        <!-- Аналитика — реальные данные Аиши -->
+        <!-- Аналитика — реальные данные тенанта -->
         <div class="grid grid-cols-4 gap-4">
           <div class="aisha-lead-card rounded-[14px] p-5 relative" style="background:#FFFFFF; border:0.5px solid #ECECEC;">
             <div class="flex items-center gap-2 mb-2">
               <span class="w-2 h-2 rounded-full" style="background:#0B8A5B; box-shadow:0 0 0 3px rgba(11,138,91,.14);"></span>
-              <span class="text-[12px]" style="color:#8A8A90;">Лиды Аиши, всего</span>
+              <span class="text-[12px]" style="color:#8A8A90;">Лиды, всего</span>
             </div>
             <div class="num text-[28px] font-semibold leading-none flex items-baseline gap-2" style="color:#1A1A1A;">
               <span x-text="aishaStats.leads_total ?? 0"></span>
@@ -1675,11 +1675,11 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
           </div>
         </div>
 
-        <!-- Последние лиды Аиши (контакты с почтами/телефонами) -->
+        <!-- Последние лиды (контакты с почтами/телефонами) -->
         <div class="bg-white rounded-2xl border border-slate-100 overflow-hidden" x-show="(aishaLeads||[]).length>0">
           <div class="flex items-center justify-between px-5 py-4 border-b border-slate-100">
             <div>
-              <div class="text-[15px] font-semibold" style="color:#1A1A1A;">Последние лиды Аиши</div>
+              <div class="text-[15px] font-semibold" style="color:#1A1A1A;">Последние лиды</div>
               <div class="text-[12px]" style="color:#8A8A90;">контакты, оставленные клиентами в диалоге</div>
             </div>
             <button @click="page='conversations'" class="text-[12px]" style="color:#0B8A5B;">Все диалоги →</button>
@@ -2322,7 +2322,7 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
 
       <!-- ══ KNOWLEDGE BASE · 404ai (полная, 1:1 с движком) ══ -->
       <div x-show="page==='kb' && scope==='bot404' && tenantSlug==='aisha'" class="p-6 space-y-4">
-        <div class="font-mono text-[11px] uppercase tracking-[0.22em] pl-1" style="color:rgba(245,245,240,0.55)"><span class="text-orange-400/80">// knowledge</span> · полная база Аиши, 1:1 с движком (read-only)</div>
+        <div class="font-mono text-[11px] uppercase tracking-[0.22em] pl-1" style="color:rgba(245,245,240,0.55)"><span class="text-orange-400/80">// knowledge</span> · полная база знаний, 1:1 с движком (read-only)</div>
         <template x-for="(blk, bi) in kbBlocks" :key="bi">
           <div class="rounded-2xl p-5" style="background:rgba(255,255,255,.04);border:1px solid rgba(245,245,240,.1)">
             <div x-show="blk.title" class="font-display font-bold text-sm mb-2" style="color:#ff6b35" x-text="blk.title"></div>
@@ -2333,7 +2333,7 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
           <div class="font-display font-bold text-sm mb-2" style="color:#ff6b35">Отработка возражений (скрипты)</div>
           <div class="text-xs leading-relaxed" style="color:rgba(245,245,240,.72);white-space:pre-wrap" x-text="aishaKb.scripts"></div>
         </div>
-        <div class="text-[11px] font-mono pl-1" style="color:rgba(245,245,240,0.4)">// тянется напрямую из движка Аиши (sales-bot.js) — всегда актуально</div>
+        <div class="text-[11px] font-mono pl-1" style="color:rgba(245,245,240,0.4)">// тянется напрямую из движка бота (sales-bot.js) — всегда актуально</div>
       </div>
       <!-- ══ KNOWLEDGE BASE ══════════════════════════════════════════════════ -->
       <div x-show="page==='kb' && (scope!=='bot404' || tenantSlug!=='aisha')" x-init="if(authenticated && page==='kb') loadKbDocs()" class="p-6 space-y-5">
@@ -2725,7 +2725,7 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
                 </div>
                 <!-- Композер оператора (видим только в режиме takeover) -->
                 <div x-show="currentSession()?.human_takeover" class="p-4 border-t border-amber-200 bg-amber-50">
-                  <div class="text-xs font-semibold mb-2" style="color:#7A5A1A;">👤 Ответ от имени Аиши (вы ведёте диалог)</div>
+                  <div class="text-xs font-semibold mb-2" style="color:#7A5A1A;">👤 Ответ от имени бота (вы ведёте диалог)</div>
                   <div class="flex gap-2">
                     <textarea x-model="operatorText" rows="2"
                       @keydown.ctrl.enter.prevent="sendOperatorMessage()"
@@ -5085,7 +5085,7 @@ function adminApp() {
         this.wColor = '#0B8A5B';
         this.wApiUrl = 'https://bot.217-149-25-34.sslip.io';
         this.wGreeting = 'Здравствуйте! Я ' + (this.brandBotName || 'Аиша') + ' — помогу подобрать решение.';
-        // KB Аиши тянется только для реального tenant=aisha (у остальных этого endpoint нет)
+        // KB движка тянется только для реального tenant=aisha (у остальных этого endpoint нет)
         if (this.tenantSlug === 'aisha') {
           try { const kr = await fetch('https://bot.217-149-25-34.sslip.io/api/admin/bot404/kb', { headers: { 'X-Admin-Token': this.token || '' } }); if (kr.ok) { const d = await kr.json(); this.aishaKb = {kb:d.kb||'', scripts:d.scripts||''}; if (d.skills) this.skills = d.skills; if (d.agents) this.agentConfigs = d.agents; } } catch(e) {}
         }
@@ -5145,7 +5145,7 @@ function adminApp() {
           const r = await fetch('/admin/api/bot404/stats', { headers: this.h() });
           if (r.ok) { const d = await r.json(); this.stats = d.stats; this.extStats = d.extStats; }
         } else { const r = await fetch('/health'); this.stats = await r.json(); }
-        // Дополнительно — данные Аиши (лиды) для дашборда, всегда показываем
+        // Дополнительно — данные лидов для дашборда, всегда показываем
         try {
           const ar = await fetch('/admin/api/bot404/stats', { headers: this.h() });
           if (ar.ok) {
