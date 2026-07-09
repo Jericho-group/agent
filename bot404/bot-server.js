@@ -407,6 +407,36 @@ async function avitoSend(tenant, chatId, text) {
   return r.json().catch(() => ({}));
 }
 
+// Подтягивает прежнюю переписку чата из Avito (сообщения оператора до подключения бота)
+// и сеет её в bot_404_log ОДИН раз — при первом входящем в незнакомый чат, чтобы бот видел
+// контекст, а не начинал квалификацию с нуля с уже общавшимся клиентом.
+async function avitoSeedHistory(tenant, chatId, tid, currentText) {
+  try {
+    const sid = 'avito:' + chatId;
+    const ex = await pool.query('SELECT 1 FROM bot_404_log WHERE session_id=$1 AND tenant_id=$2 LIMIT 1', [sid, tid]);
+    if (ex.rows.length) return;  // локальная история уже есть — не дублируем
+    const token = await avitoToken(tenant.avito_client_id, tenant.avito_client_secret);
+    const r = await fetch('https://api.avito.ru/messenger/v3/accounts/' + tenant.avito_user_id + '/chats/' + encodeURIComponent(chatId) + '/messages/?limit=30', { headers: { Authorization: 'Bearer ' + token } });
+    if (!r.ok) return;
+    const d = await r.json().catch(() => ({}));
+    let msgs = (d && d.messages) || [];
+    if (!Array.isArray(msgs) || !msgs.length) return;
+    msgs = msgs.slice().reverse();  // API отдаёт новейшие первыми → в хронологию
+    const cur = String(currentText || '').trim();
+    let seeded = 0;
+    for (const m of msgs) {
+      const dir = m.direction === 'out' ? 'out' : 'in';
+      const txt = (m.content && m.content.text) ? String(m.content.text).trim() : '';
+      if (!txt) continue;
+      if (/\[Системное сообщение\]|Ассистент\s+Авито\s+ответил|посмотрел номер|создал чат/i.test(txt)) continue; // авито-служебка
+      if (dir === 'in' && cur && txt === cur) continue;  // текущее входящее залогирует сам sales-chat
+      await pool.query('INSERT INTO bot_404_log(session_id,direction,text,tenant_id) VALUES($1,$2,$3,$4)', [sid, dir, txt.slice(0, 1500), tid]).catch(() => {});
+      seeded++;
+    }
+    if (seeded) console.log('[avito] история подтянута chat=' + chatId + ' сообщений=' + seeded);
+  } catch (e) { console.warn('[avito-seed]', e.message); }
+}
+
 // account user_id -> tenant slug (кэш 60с)
 const _avitoTenantCache = new Map();
 async function tenantSlugByAvitoUser(userId) {
@@ -1486,7 +1516,11 @@ app.post('/api/avito/webhook/:secret', async (req, res) => {
     const text = (v.content && v.content.text) ? String(v.content.text).trim() : '';
     if (!chatId || !text) return;
     if (String(authorId) === String(accountId)) return;  // игнор собственных исходящих (эхо)
-    // tenant уже определён по секрету пути (slug) — accountId из тела не доверяем
+    // tenant по секрету пути (slug); грузим для seed истории и avitoSend (accountId из тела не доверяем)
+    const t = await loadTenant(slug);
+    if (!t) return;
+    // Подтянуть прежнюю переписку оператора при ПЕРВОМ входящем в незнакомый чат — один раз
+    if (t.avito_client_id) await avitoSeedHistory(t, chatId, t.tenant_id, text);
 
     // Полная логика бота — через внутренний вызов sales-chat (session = avito chat_id)
     const rr = await fetch('http://127.0.0.1:' + PORT + '/api/sales-chat', {
@@ -1502,8 +1536,7 @@ app.post('/api/avito/webhook/:secret', async (req, res) => {
     const data = await rr.json().catch(() => ({}));
     const reply = data && data.reply;
     if (reply && String(reply).trim()) {
-      const t = await loadTenant(slug);
-      if (!t || !t.avito_client_id) { console.warn('[avito] у тенанта ' + slug + ' нет avito-кредов'); return; }
+      if (!t.avito_client_id) { console.warn('[avito] у тенанта ' + slug + ' нет avito-кредов'); return; }
       await avitoSend(t, chatId, reply);
       console.log('[avito] ответ отправлен chat=' + chatId + ' tenant=' + slug + ' len=' + reply.length);
     }
