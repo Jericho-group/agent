@@ -794,6 +794,15 @@ function filterHistoryForLLM(history) {
 // содержать бренд 404ai (наследие однотенантной Аиши в fallback-путях). Перехватываем
 // ВСЕ res.json этого хендлера и скрабим reply — что бы ни произвёл любой путь.
 const TENANT_LEAK_RE = /404\s?ai|@404ai|echolytics|phonex\b|\borchestra\b|\bcoach\b|аиш[аеиую]/i;
+// Guard: LLM может ложно подтвердить «Спасибо, записала номер», когда клиент дал номер
+// СЛОВАМИ («восемь девятьсот шестнадцать...») — цифр в сообщении нет, лид не создастся,
+// клиент верит что записан. Ловим паттерн подтверждения на выходе + проверяем сколько
+// цифр в последнем клиентском сообщении.
+const PHONE_ACK_RE = /(?:записал[аи]|записан[оа]?|принял[аи]?)\s+(?:ваш(?:у)?\s+)?(?:номер|телефон)|(?:номер|телефон)\s+(?:записан[оа]?|принят[оа]?)/i;
+function countDigits(s) {
+  const m = String(s || '').match(/\d/g);
+  return m ? m.length : 0;
+}
 // Утечка/пересказ системного промпта: бот НЕ должен раскрывать свои правила, ограничения,
 // цель или признаваться, что он бот/следует инструкции. Ловим характерные фразы-пересказы.
 const PROMPT_LEAK_RE = /мне\s+запрещено|не\s+могу\s+задавать\s+два|нельзя\s+(?:отправлять|писать)\s+два|по\s+инструкц|мо[ий]\s+(?:инструкц|правил|промпт|ограничен)|систем\w*\s*промпт|признавать[,\s]+что\s+я\s+бот|не\s+признавать|я\s+(?:—\s*)?(?:бот|ии|искусственн|языкова|нейросет)|моя\s+главная\s+цель\s+[—-]\s*получить/i;
@@ -830,6 +839,19 @@ app.post('/api/sales-chat', resolveTenant, async (req, res) => {
     let sid = String((req.body && req.body.session_id) || '').trim();
     if (!sid) sid = 's' + Math.random().toString(36).slice(2) + Date.now().toString(36);
     const msg = String((req.body && req.body.message) || '').trim();
+    // Phone-ack guard (клиентские тенанты): если бот подтверждает получение номера, а
+    // в клиентском сообщении нет 10+ цифр — заменить на просьбу продиктовать цифрами.
+    if (!isInternalTenant(req.tenant)) {
+      const _prevJson2 = res.json.bind(res);
+      res.json = (obj) => {
+        if (obj && typeof obj.reply === 'string' && msg && PHONE_ACK_RE.test(obj.reply) && countDigits(msg) < 10) {
+          console.warn('[phone-ack-guard] tenant=' + req.tenant.slug + ' sid=' + sid + ' digits=' + countDigits(msg) + ' msg=' + String(msg).slice(0, 80));
+          obj.reply = 'Простите, не разобрала номер — продиктуйте, пожалуйста, цифрами, например 8 916 123 45 67.';
+          obj._phone_ack_guard = true;
+        }
+        return _prevJson2(obj);
+      };
+    }
     const h = await pool.query("SELECT direction, text FROM bot_404_log WHERE session_id=$1 AND tenant_id=$2 ORDER BY id DESC LIMIT 60", [sid, tid]);
     const history = h.rows.reverse().map(r => ({ role: r.direction === 'in' ? 'user' : 'assistant', content: r.text }));
     const userMsg = msg || '(Клиент открыл чат на сайте 404ai. Поздоровайся и предложи помочь.)';
