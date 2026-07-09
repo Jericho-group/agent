@@ -951,7 +951,7 @@ async def bot404_stats(x_admin_token: str = Header(default="")):
     last24 = await pool.fetchval("SELECT count(*) FROM bot_404_log WHERE tenant_id=$1 AND created_at > now() - interval '24 hours'", tid) or 0
     leads = await pool.fetchval("SELECT count(*) FROM bot_404_leads WHERE tenant_id=$1", tid) or 0
     # company — из брендинга тенанта, а не хардкод 404ai (иначе клиент видит вендора в своём кабинете)
-    brand = await pool.fetchval("SELECT COALESCE(brand_name, name) FROM v_tenant_branding WHERE tenant_id=$1", tid) or ""
+    brand = await pool.fetchval("SELECT brand_name FROM v_tenant_branding WHERE tenant_id=$1", tid) or ""
     bot_nm = await pool.fetchval("SELECT bot_name FROM v_tenant_branding WHERE tenant_id=$1", tid) or ""
     company = (str(brand) + (" · " + str(bot_nm) if bot_nm else "")).strip(" ·") or "—"
     return {
