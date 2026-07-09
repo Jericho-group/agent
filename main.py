@@ -395,7 +395,7 @@ async def health(deep: bool = False):
             try:
                 pool = await _b404_pool()
                 async with pool.acquire() as con:
-                    result["tenants"] = await con.fetchval("SELECT COUNT(*) FROM tenants WHERE is_active=true")
+                    result["tenants"] = await con.fetchval("SELECT COUNT(*) FROM tenants WHERE enabled=true")
             except Exception:
                 pass
         except Exception as e:
@@ -955,12 +955,15 @@ async def bot404_stats(x_admin_token: str = Header(default="")):
     brand = await pool.fetchval("SELECT brand_name FROM v_tenant_branding WHERE tenant_id=$1", tid) or ""
     bot_nm = await pool.fetchval("SELECT bot_name FROM v_tenant_branding WHERE tenant_id=$1", tid) or ""
     company = (str(brand) + (" · " + str(bot_nm) if bot_nm else "")).strip(" ·") or "—"
+    # модель — эффективная модель тенанта (а не хардкод вендора); эскалации — реальный счётчик
+    tmodel = await pool.fetchval("SELECT model FROM v_tenant_effective_limits WHERE tenant_id=$1", tid) or "gemini-2.5-flash-lite"
+    escalated = await pool.fetchval("SELECT count(*) FROM session_meta WHERE tenant_id=$1 AND escalated", tid) or 0
     return {
         "stats": {"status": "online", "active_sessions": sessions, "knowledge_base_docs": kb_docs,
-                  "models": {"agent": "gemini-2.5-flash-lite", "router": "gemini-2.5-flash (критик)", "orchestrator": "gemini-2.5-flash"},
+                  "models": {"agent": tmodel, "router": tmodel, "orchestrator": tmodel},
                   "company": company},
         "extStats": {"total_sessions": sessions, "total_messages": total, "messages_24h": last24,
-                     "qualified_leads": leads, "escalated": 0, "temperature": {"hot": 0, "warm": 0, "cold": 0}, "intents": []},
+                     "qualified_leads": leads, "escalated": escalated, "temperature": {"hot": 0, "warm": 0, "cold": 0}, "intents": []},
     }
 
 
@@ -1999,13 +2002,15 @@ class _PartnerRegisterBody(BaseModel):
     contact_type: str = "telegram"
     session_id: str | None = None
     source: str | None = None  # 'tg-bot' | 'widget'
+    tenant_slug: str | None = None  # тенант бота; дефолт aisha (единственный с партнёркой)
 
 
 @app.post("/internal/partner-register", dependencies=[Depends(_check_internal)])
 async def internal_partner_register(body: _PartnerRegisterBody):
     """Создаёт заявку партнёра со status='pending'. Если контакт уже есть — возвращает существующего."""
     pool = await _b404_pool()
-    tid = await _tenant_id_from_token(x_admin_token)
+    # internal-эндпоинт без admin-токена: тенант берём из body (дефолт aisha), НЕ из несуществующего x_admin_token
+    tid = await pool.fetchval("SELECT id FROM tenants WHERE slug=$1", body.tenant_slug or "aisha")
     existing = await pool.fetchrow(
         "SELECT id, status FROM bot_404_partners WHERE tenant_id=$1 AND lower(contact)=lower($2) LIMIT 1",
         tid, body.contact,
@@ -2061,6 +2066,7 @@ async def internal_partner_stats(
     contact: str | None = None,
     session_id: str | None = None,
     message: str | None = None,
+    tenant_slug: str = "aisha",
 ):
     """Идентификация партнёра + его статистика. Зовёт bot-server по docker network.
     Параметры (любая комбинация):
@@ -2089,16 +2095,16 @@ async def internal_partner_stats(
             u = None
         return ("@" + str(u).lower(), "tg-session") if u else None
 
-    def get_partner_stats(contact_val):
+    def get_partner_stats(contact_val, p_tid):
         try:
             conn = _kb_conn()
             with conn.cursor(cursor_factory=_pg_extras.RealDictCursor) as cur:
                 cur.execute("""SELECT id, name, contact, rate_pct::float AS rate_pct, status, joined_at, referral_code
-                               FROM bot_404_partners WHERE lower(contact)=lower(%s) LIMIT 1""", (contact_val,))
+                               FROM bot_404_partners WHERE lower(contact)=lower(%s) AND tenant_id=%s LIMIT 1""", (contact_val, p_tid))
                 p = cur.fetchone()
                 if not p: return None
                 cur.execute("""SELECT lead_name, status, reward_rub::float AS reward_rub, payout_status, created_at
-                               FROM bot_404_partner_leads WHERE partner_id=%s ORDER BY created_at DESC LIMIT 50""", (p["id"],))
+                               FROM bot_404_partner_leads WHERE partner_id=%s AND tenant_id=%s ORDER BY created_at DESC LIMIT 50""", (p["id"], p_tid))
                 leads = [dict(r) for r in cur.fetchall()]
         except Exception as e:
             print(f"[partner-stats] db failed: {e}"); return None
@@ -2124,7 +2130,18 @@ async def internal_partner_stats(
             resolved_contact, source = r
     if not resolved_contact:
         return {"found": False, "reason": "contact_not_resolved"}
-    stats = get_partner_stats(resolved_contact)
+    # tenant бота (дефолт aisha): партнёра ищем ТОЛЬКО в пределах этого тенанта (изоляция)
+    _p_tid = None
+    try:
+        _c = _kb_conn()
+        with _c.cursor() as _cur:
+            _cur.execute("SELECT id FROM tenants WHERE slug=%s", (tenant_slug,)); _r = _cur.fetchone()
+            _p_tid = _r[0] if _r else None
+    except Exception:
+        _p_tid = None
+    if _p_tid is None:
+        return {"found": False, "reason": "tenant_not_resolved"}
+    stats = get_partner_stats(resolved_contact, _p_tid)
     if not stats:
         return {"found": False, "reason": "not_a_partner", "contact": resolved_contact, "source": source}
     return {"found": True, "contact": resolved_contact, "source": source, **stats}

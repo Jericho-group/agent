@@ -748,7 +748,7 @@ function filterHistoryForLLM(history) {
 // Единый предохранитель: для тенанта с кастомным промптом НИ ОДИН ответ не должен
 // содержать бренд 404ai (наследие однотенантной Аиши в fallback-путях). Перехватываем
 // ВСЕ res.json этого хендлера и скрабим reply — что бы ни произвёл любой путь.
-const TENANT_LEAK_RE = /404\s?ai|@404ai|echolytics|phonex\b|\borchestra\b|\bcoach\b/i;
+const TENANT_LEAK_RE = /404\s?ai|@404ai|echolytics|phonex\b|\borchestra\b|\bcoach\b|аиш[аеиую]/i;
 // Утечка/пересказ системного промпта: бот НЕ должен раскрывать свои правила, ограничения,
 // цель или признаваться, что он бот/следует инструкции. Ловим характерные фразы-пересказы.
 const PROMPT_LEAK_RE = /мне\s+запрещено|не\s+могу\s+задавать\s+два|нельзя\s+(?:отправлять|писать)\s+два|по\s+инструкц|мо[ий]\s+(?:инструкц|правил|промпт|ограничен)|систем\w*\s*промпт|признавать[,\s]+что\s+я\s+бот|не\s+признавать|я\s+(?:—\s*)?(?:бот|ии|искусственн|языкова|нейросет)|моя\s+главная\s+цель\s+[—-]\s*получить/i;
@@ -801,7 +801,7 @@ app.post('/api/sales-chat', resolveTenant, async (req, res) => {
       const c = detectContact(msg);
       if (c.phone || c.email || c.telegram) {
         const transcript = (history.map(x => (x.role === 'user' ? 'Клиент: ' : 'Бот: ') + x.content).join('\n') + '\nКлиент: ' + msg).slice(0, 2000);
-        const ins = await pool.query("INSERT INTO bot_404_leads(session_id,phone,email,telegram,note,tenant_id) SELECT $1,$2,$3,$4,$5,$6 WHERE NOT EXISTS (SELECT 1 FROM bot_404_leads WHERE session_id=$1 AND tenant_id=$6 AND COALESCE(phone,'x')=COALESCE($2,'x') AND COALESCE(email,'y')=COALESCE($3,'y') AND COALESCE(telegram,'z')=COALESCE($4,'z')) RETURNING id", [sid, c.phone, c.email, c.telegram, transcript, tid]).catch(() => ({ rows: [] }));
+        const ins = await pool.query("INSERT INTO bot_404_leads(session_id,phone,email,telegram,note,tenant_id) SELECT $1,$2,$3,$4,$5,$6 WHERE NOT EXISTS (SELECT 1 FROM bot_404_leads WHERE session_id=$1 AND tenant_id=$6 AND COALESCE(phone,'x')=COALESCE($2,'x') AND COALESCE(email,'y')=COALESCE($3,'y') AND COALESCE(telegram,'z')=COALESCE($4,'z')) RETURNING id", [sid, c.phone, c.email, c.telegram, transcript, tid]).catch((e) => { console.error('[lead-insert] fail tenant=' + tid + ' sid=' + sid + ':', e.message); return { rows: [] }; });
         if (ins && ins.rows && ins.rows.length) {
           const lkLink = ADMIN_BASE_URL + '/admin?session=' + encodeURIComponent(sid);
           sendAdminNotify(
@@ -1134,7 +1134,7 @@ async function processTgUpdate(upd, ctx) {
       const ins = await pool.query(
         "INSERT INTO bot_404_leads(session_id,phone,email,telegram,note,tenant_id) SELECT $1,$2,$3,$4,$5,$6 WHERE NOT EXISTS (SELECT 1 FROM bot_404_leads WHERE session_id=$1 AND tenant_id=$6 AND COALESCE(phone,'x')=COALESCE($2,'x') AND COALESCE(email,'y')=COALESCE($3,'y') AND COALESCE(telegram,'z')=COALESCE($4,'z')) RETURNING id",
         [sid, c.phone, c.email, c.telegram, 'Telegram: ' + (userName || tgUsername || chatId) + '\n' + text.slice(0, 1500), tid]
-      ).catch(() => ({ rows: [] }));
+      ).catch((e) => { console.error('[lead-insert:tg] fail tenant=' + tid + ' sid=' + sid + ':', e.message); return { rows: [] }; });
       if (ins.rows?.length) {
         const lkLink = ADMIN_BASE_URL + '/admin?session=' + encodeURIComponent(sid);
         sendAdminNotify(
@@ -1515,7 +1515,11 @@ app.get('/api/sales-history', resolveTenant, async (req, res) => {
     const sid = String(req.query.sid || '');
     if (!sid) return res.json({ messages: [] });
     const r = await pool.query("SELECT direction, text FROM bot_404_log WHERE session_id=$1 AND tenant_id=$2 ORDER BY id ASC LIMIT 50", [sid, req.tenant.tenant_id]);
-    res.json({ messages: r.rows });
+    // Скрабим реплей истории так же, как лайв-ответ: у клиентских тенантов чистим бренд-утечку
+    // в исходящих (bot) сообщениях (в лог могли попасть GREET/SAFE_REPLY до скраба).
+    const messages = isInternalTenant(req.tenant) ? r.rows
+      : r.rows.map(m => (m.direction === 'out' ? { ...m, text: scrubTenantReply(req.tenant, m.text) } : m));
+    res.json({ messages });
   } catch (e) { res.json({ messages: [] }); }
 });
 
@@ -1835,10 +1839,10 @@ app.post('/api/admin/tenants/:slug/impersonate', async (req, res) => {
         `  Окно:   ${ttl_sec} секунд\n\n` +
         `Это сделано чтобы помочь с настройкой или диагностикой. Все действия логируются.\n\n` +
         `Если вы не ожидали захода — ответьте на это письмо или напишите ap@404ai.ru.\n\n` +
-        `Полный журнал — раздел «Активность» в вашем кабинете: http://217.149.25.34/admin`;
+        `Полный журнал — раздел «Активность» в вашем кабинете: ${ADMIN_BASE_URL}/admin`;
       sendNotify(ownerEmail, subj, body).catch(() => {});
     }
-    const url = 'http://217.149.25.34/admin?imp=' + token + '&slug=' + encodeURIComponent(slug);
+    const url = ADMIN_BASE_URL + '/admin?imp=' + token + '&slug=' + encodeURIComponent(slug);
     res.json({ url, token, ttl_sec, target: t.slug, notified: !!ownerEmail });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

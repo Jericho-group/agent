@@ -2,7 +2,9 @@
    Логика/БЗ/история — на стороне speech32.ru. Вставка: <script src=".../api/widget-404.js" async></script> */
 (function(){
   if (window.__w404loaded) return; window.__w404loaded = true;
-  var API = 'https://bot.217-149-25-34.sslip.io', SKEY = 'sid404';
+  // API-хост выводим из адреса, откуда загружен сам виджет (script.src), а не хардкодим —
+  // тогда виджет с bot.dirizher404.ru бьёт на прод, с тест-хоста на тест. Фолбэк — прод.
+  var API = (function(){ try { return new URL((document.currentScript||{}).src).origin; } catch(e){ return 'https://bot.dirizher404.ru'; } })(), SKEY = 'sid404';
   // 3-уровневый fallback для session_id: localStorage → sessionStorage → window-level
   // (защита от incognito/disabled cookies/iframe-restrictions, иначе каждое сообщение
   // создаёт новую сессию в админке)
@@ -21,20 +23,22 @@
 
   function loadFont(){ if (document.getElementById('w404-font')) return; var l=document.createElement('link'); l.id='w404-font'; l.rel='stylesheet'; l.href='https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap'; (document.head||document.documentElement).appendChild(l); }
 
-  // Дефолты для tenant 'aisha' (если config недоступен — рендерим как раньше)
+  // Нейтральные дефолты (если config недоступен). НЕ хардкодим 404ai/Аишу —
+  // иначе на сайте клиента с нерезолвнутым config показался бы бренд вендора.
+  // Реальный брендинг приходит из /api/widget-config тенанта.
   var DEFAULT_CFG = {
-    brand_name: '404ai',
-    bot_name: 'Аиша',
-    role_subtitle: 'AI-консультант 404ai · обычно отвечает сразу',
+    brand_name: '',
+    bot_name: 'Ассистент',
+    role_subtitle: 'AI-консультант · обычно отвечает сразу',
     logo_url: null,
     primary_color: '#0B8A5B',
     accent_color: '#E0B341',
     text_color: '#1A1A1A',
     greeting: '',
-    nudge_text: 'Нужна помощь? Спросите <b>Аишу</b>',
-    chat_title: 'Чат с Аишей',
+    nudge_text: 'Нужна помощь?',
+    chat_title: 'Чат',
     footer_text: null,
-    manager_email: 'ap@404ai.ru',
+    manager_email: null,
     position: 'br',
     font_family: 'Manrope',
     custom_css: null,
@@ -73,9 +77,14 @@
     var COLOR_HOVER   = _darken(COLOR_PRIMARY, 0.10);
     var COLOR_WASH    = _wash(COLOR_PRIMARY);
     var BOT_NAME      = cfg.bot_name || 'Ассистент';
-    var BRAND_NAME    = cfg.brand_name || '404ai';
-    var SUBTITLE      = cfg.role_subtitle || ('AI-консультант ' + BRAND_NAME);
+    var BRAND_NAME    = cfg.brand_name || '';
+    var SUBTITLE      = cfg.role_subtitle || ('AI-консультант' + (BRAND_NAME ? ' ' + BRAND_NAME : ''));
     var CHAT_TITLE    = cfg.chat_title    || ('Чат с ' + BOT_NAME);
+    // Квик-реплаи из конфига тенанта; нейтральный фолбэк вместо вшитых продуктовых кнопок
+    var QUICK_ITEMS   = (cfg.quick_replies && cfg.quick_replies.length) ? cfg.quick_replies
+      : [{q:'Расскажите подробнее',t:'Подробнее'},{q:'Сколько это стоит?',t:'Цены'},{q:'Связаться с менеджером',t:'Менеджер'}];
+    var QUICK_HTML    = '<div class="aisha-quick">' + QUICK_ITEMS.map(function(x){
+      return '<button type="button" data-q="'+_esc(x.q)+'">'+_esc(x.t||x.q)+'</button>'; }).join('') + '</div>';
     var NUDGE_HTML    = cfg.nudge_text    || ('Нужна помощь? Спросите <b>'+_esc(BOT_NAME)+'</b>');
     var POSITION      = cfg.position      || 'br';
     var POS_CSS = ({
@@ -181,7 +190,7 @@
           +'<div class="aisha-id"><div class="name">'+_esc(BOT_NAME)+'</div><div class="role"><span class="live"></span>'+_esc(SUBTITLE)+'</div></div>'
           +'<div class="aisha-head-btns"><button class="aisha-min" type="button" aria-label="Свернуть"><svg viewBox="0 0 24 24" fill="none"><path d="M6 12h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div></header>'
         +'<div class="aisha-body"><div class="aisha-day">Сегодня</div></div>'
-        +'<div class="aisha-quick"><button type="button" data-q="Расскажите про речевую аналитику Echolytics">Речевая аналитика</button><button type="button" data-q="Сколько стоит автообзвон Phonex?">Цены</button><button type="button" data-q="Хочу записаться на демо">Записаться на демо</button></div>'
+        +QUICK_HTML
         +'<div class="aisha-input"><form class="aisha-form"><textarea class="aisha-text" rows="1" placeholder="Напишите сообщение…" aria-label="Сообщение"></textarea>'
           +'<button class="aisha-send" type="submit" aria-label="Отправить"><svg viewBox="0 0 24 24" fill="none"><path d="M4.5 12 19 5l-3.2 14-4-5.2L4.5 12Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m11.8 13.8 4-4.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button></form>'
           +'<div class="aisha-consent">Отправляя сообщение, вы соглашаетесь с <a href="/cookie/" target="_blank" rel="noopener">политикой конфиденциальности</a> (152-ФЗ)</div></div>'
