@@ -339,7 +339,12 @@ export async function generateReply(history, userMsg, partnerBlock, factsBlock, 
   // Кастом-тенанты (напр. Заря) генерят черновик СИЛЬНОЙ моделью (критик для них пропущен),
   // иначе голый flash-lite плохо держит сложный промпт: не задаёт вопрос, теряет шаги.
   const _draftModel = (tenant && tenant.slug && tenant.slug !== 'aisha' && tenant.slug !== 'default') ? (tenant.model || 'gemini-2.5-flash') : undefined;
-  const draft = await llmR([{ role: 'system', content: systemPrompt(tenantForPrompt) + langDir + partnerDir + factsDir + emoDir }].concat(history || []).concat([{ role: 'user', content: userMsg }]), 0.6, 350, usage, _draftModel);
+  const _msgs = [{ role: 'system', content: systemPrompt(tenantForPrompt) + langDir + partnerDir + factsDir + emoDir }].concat(history || []).concat([{ role: 'user', content: userMsg }]);
+  let draft = await llmR(_msgs, 0.6, 350, usage, _draftModel);
+  // Anti-обрезок: модель/прокси иногда отдаёт огрызок («Поня», «Хорошо,») — если ответ короткий
+  // или не заканчивается завершающим знаком, перегенерируем один раз (для клиента огрызок = позор).
+  const _looksCut = (s) => { s = String(s || '').trim(); return s.length < 8 || !/[.!?…»)"]$/.test(s); };
+  if (_looksCut(draft)) { const _r = await llmR(_msgs, 0.6, 350, usage, _draftModel); if (!_looksCut(_r)) draft = _r; }
   const priorBot = (history || []).filter(m => m.role === 'assistant').map(m => m.content).join('  ');
   const saidNums = Array.from(new Set((priorBot.match(/\d[\d  .,]*\s*(?:₽|%|руб|млн|тыс|диалог\w*|звонк\w*|лид\w*|сделок|мес\w*|дн[ея])/giu) || []).map(x => x.replace(/\s+/g, ' ').trim()))).slice(0, 15);
   const repeatGuard = saidNums.length ? ('\n\nЭти цифры/факты УЖЕ назывались в этом диалоге — НЕ повторяй их дословно (ОСОБЕННО цену и тариф), вместо повтора веди новым аргументом, вопросом про клиента или шагом к пилоту: ' + saidNums.join('; ')) : '';
