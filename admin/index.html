@@ -5315,7 +5315,7 @@ function adminApp() {
           const r = await fetch('/admin/api/bot404/transcript?sid='+encodeURIComponent(id), { headers: this.h() });
           if (r.ok) { const d = await r.json(); this.sessionMessages = (d.messages||[]).map(m => ({ role: m.direction==='in'?'user':'assistant', content: m.text, created_at: m.created_at })); }
         } else {
-          const r = await fetch(`/history/${id}`);
+          const r = await fetch(`/history/${encodeURIComponent(id)}`, { headers: this.h() });
           if (r.ok) this.sessionMessages = await r.json();
         }
         // session_facts (structured memory о клиенте — для tenant=bot404)

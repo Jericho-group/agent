@@ -284,18 +284,18 @@ async def chat(req: ChatRequest):
     )
 
 
-@app.get("/history/{session_id}", response_model=list[HistoryMessage])
+@app.get("/history/{session_id}", response_model=list[HistoryMessage], dependencies=[Depends(_check_bot404)])
 async def get_history(session_id: str):
-    """Возвращает историю диалога для указанной сессии."""
+    """Возвращает историю диалога для указанной сессии. Требует X-Admin-Token (JWT либо legacy)."""
     history = await _memory.get_history(session_id)
     if not history:
         raise HTTPException(status_code=404, detail="Session not found or empty")
     return [HistoryMessage(**msg) for msg in history]
 
 
-@app.delete("/history/{session_id}")
+@app.delete("/history/{session_id}", dependencies=[Depends(_check_bot404_admin)])
 async def clear_history(session_id: str):
-    """Очищает историю диалога для сессии."""
+    """Очищает историю диалога для сессии. Только admin/root."""
     await _memory.clear_session(session_id)
     return {"message": f"History cleared for session {session_id}"}
 
@@ -430,7 +430,7 @@ class _LoginBody(_BaseModel):
 
 
 def _check_bot404(x_admin_token: str = Header(default="")):
-    # Принимаем JWT либо legacy global-токены
+    # Принимаем JWT либо legacy global-токены. Пускает любую JWT-роль (viewer/member/admin/root).
     if not x_admin_token:
         raise HTTPException(status_code=401, detail="Missing X-Admin-Token")
     claims = _decode_jwt(x_admin_token)
@@ -439,6 +439,23 @@ def _check_bot404(x_admin_token: str = Header(default="")):
     if (settings.admin_token and _secrets_mod.compare_digest(x_admin_token, settings.admin_token)) \
        or (settings.bot404_token and _secrets_mod.compare_digest(x_admin_token, settings.bot404_token)):
         return  # Legacy токен
+    raise HTTPException(status_code=401, detail="Invalid admin token")
+
+
+def _check_bot404_admin(x_admin_token: str = Header(default="")):
+    """Как _check_bot404, но только для write-операций: role in ('admin','root') или legacy env-токены.
+    viewer/member получат 403."""
+    if not x_admin_token:
+        raise HTTPException(status_code=401, detail="Missing X-Admin-Token")
+    claims = _decode_jwt(x_admin_token)
+    if claims:
+        role = claims.get("role", "viewer")
+        if role in ("admin", "root"):
+            return
+        raise HTTPException(status_code=403, detail="Admin role required")
+    if (settings.admin_token and _secrets_mod.compare_digest(x_admin_token, settings.admin_token)) \
+       or (settings.bot404_token and _secrets_mod.compare_digest(x_admin_token, settings.bot404_token)):
+        return  # Legacy env-токены = root
     raise HTTPException(status_code=401, detail="Invalid admin token")
 
 
@@ -541,7 +558,7 @@ class _AddUserBody(_BaseModel):
     role: str = "member"
 
 
-@app.post("/admin/api/team", dependencies=[Depends(_check_bot404)])
+@app.post("/admin/api/team", dependencies=[Depends(_check_bot404_admin)])
 async def team_add(body: _AddUserBody, x_admin_token: str = Header(default="")):
     import bcrypt as _bcrypt
     if not body.email or not body.password or len(body.password) < 8:
@@ -566,7 +583,7 @@ async def team_add(body: _AddUserBody, x_admin_token: str = Header(default="")):
     return {"ok": True, "id": uid}
 
 
-@app.delete("/admin/api/team/{user_id}", dependencies=[Depends(_check_bot404)])
+@app.delete("/admin/api/team/{user_id}", dependencies=[Depends(_check_bot404_admin)])
 async def team_delete(user_id: int, x_admin_token: str = Header(default="")):
     pool = await _b404_pool()
     tid = await _tenant_id_from_token(x_admin_token)
@@ -996,7 +1013,7 @@ async def admin_sessions(x_admin_token: str = Header(default="")):
     return [{"session_id": r["session_id"], "message_count": r["message_count"]} for r in rows]
 
 
-@app.post("/admin/api/knowledge/upload", dependencies=[Depends(_check_bot404)])
+@app.post("/admin/api/knowledge/upload", dependencies=[Depends(_check_bot404_admin)])
 async def upload_knowledge(file: UploadFile = File(...), x_admin_token: str = Header(default="")):
     """Загрузить JSON файл базы знаний — статьи прикрепляются к ТЕКУЩЕМУ ТЕНАНТУ."""
     tid = await _tenant_id_from_token(x_admin_token)
@@ -1067,7 +1084,7 @@ async def list_knowledge(category: str | None = None, search: str | None = None,
     return [dict(r) for r in rows]
 
 
-@app.delete("/admin/api/knowledge", dependencies=[Depends(_check_bot404)])
+@app.delete("/admin/api/knowledge", dependencies=[Depends(_check_bot404_admin)])
 async def clear_knowledge(x_admin_token: str = Header(default="")):
     """Очистить базу знаний ТЕКУЩЕГО ТЕНАНТА (статьи без tenant_id остаются)."""
     tid = await _tenant_id_from_token(x_admin_token)
@@ -1124,7 +1141,7 @@ async def proactive_accounts(x_admin_token: str = Header(default="")):
     return await tg_client.get_accounts_status(tid)
 
 
-@app.post("/admin/api/proactive/accounts/request-code", dependencies=[Depends(_check_bot404)])
+@app.post("/admin/api/proactive/accounts/request-code", dependencies=[Depends(_check_bot404_admin)])
 async def proactive_request_code(req: TgCodeRequest):
     try:
         result = await tg_client.request_code(req.phone)
@@ -1133,7 +1150,7 @@ async def proactive_request_code(req: TgCodeRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.post("/admin/api/proactive/accounts/confirm-code", dependencies=[Depends(_check_bot404)])
+@app.post("/admin/api/proactive/accounts/confirm-code", dependencies=[Depends(_check_bot404_admin)])
 async def proactive_confirm_code(req: TgConfirmRequest, x_admin_token: str = Header(default="")):
     try:
         tid = await _tenant_id_from_token(x_admin_token)
@@ -1149,7 +1166,7 @@ async def proactive_list_campaigns(x_admin_token: str = Header(default="")):
     return await campaign_manager.list_campaigns(tid)
 
 
-@app.post("/admin/api/proactive/campaigns", dependencies=[Depends(_check_bot404)])
+@app.post("/admin/api/proactive/campaigns", dependencies=[Depends(_check_bot404_admin)])
 async def proactive_create_campaign(req: CampaignCreate, x_admin_token: str = Header(default="")):
     tid = await _tenant_id_from_token(x_admin_token)
     try:
@@ -1158,7 +1175,7 @@ async def proactive_create_campaign(req: CampaignCreate, x_admin_token: str = He
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.delete("/admin/api/proactive/campaigns/{campaign_id}", dependencies=[Depends(_check_bot404)])
+@app.delete("/admin/api/proactive/campaigns/{campaign_id}", dependencies=[Depends(_check_bot404_admin)])
 async def proactive_delete_campaign(campaign_id: int, x_admin_token: str = Header(default="")):
     tid = await _tenant_id_from_token(x_admin_token)
     await campaign_manager.delete_campaign(campaign_id, tid)
@@ -1400,7 +1417,7 @@ class _BrandingBody(_BaseModel):
     position: str | None = None
 
 
-@app.post("/admin/api/branding", dependencies=[Depends(_check_bot404)])
+@app.post("/admin/api/branding", dependencies=[Depends(_check_bot404_admin)])
 async def set_branding(body: _BrandingBody, x_admin_token: str = Header(default="")):
     pool = await _b404_pool()
     tid = await _tenant_id_from_token(x_admin_token)
@@ -1499,7 +1516,7 @@ class _TgBotBody(_BaseModel):
     bot_token: str
 
 
-@app.post("/admin/api/tg-bots", dependencies=[Depends(_check_bot404)])
+@app.post("/admin/api/tg-bots", dependencies=[Depends(_check_bot404_admin)])
 async def add_tg_bot(body: _TgBotBody, x_admin_token: str = Header(default="")):
     token = body.bot_token.strip()
     if not _re.match(r"^\d+:[A-Za-z0-9_-]{30,}$", token):
