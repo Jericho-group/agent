@@ -371,7 +371,8 @@ export async function generateReply(history, userMsg, partnerBlock, factsBlock, 
 }
 // Код страны ОБЯЗАТЕЛЕН в первой альтернативе (иначе ведущий пробел съедал «8» и терял цифру);
 // вторая альтернатива — голый мобильный 9XXXXXXXXX. Нормализуем ниже в +7XXXXXXXXXX.
-const PHONE_RE = /(?:\+7|8)[\s\-(]*\d{3}[\s)\-]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}|9\d{9}/;
+// Границы (?<!\d)…(?!\d): чтобы regex НЕ хватал первые 11 цифр из длинной строки типа 8929365444444.
+const PHONE_RE = /(?<!\d)(?:\+7|8)[\s\-(]*\d{3}[\s)\-]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}(?!\d)|(?<!\d)9\d{9}(?!\d)/;
 function normalizePhone(raw) {
   if (!raw) return null;
   let d = String(raw).replace(/\D/g, '');
@@ -381,6 +382,8 @@ function normalizePhone(raw) {
   const nat = d.slice(1); // 10 цифр без кода страны
   // отбрасываем очевидные фейки: мало разных цифр (1111111111, 9999999999, 9111111111 и т.п.)
   if (new Set(nat).size < 4) return null;
+  // отбрасываем 4+ подряд одинаковых цифр в мобильной части (444444, 000000 в номере — почти всегда фейк)
+  if (/(\d)\1{4,}/.test(nat)) return null;
   return '+' + d;
 }
 const EMAIL_RE = /[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/;

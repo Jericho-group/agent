@@ -1041,6 +1041,18 @@ app.post('/api/sales-chat', resolveTenant, async (req, res) => {
     if (!finalReply || !finalReply.trim()) {
       finalReply = 'Подскажите, пожалуйста, чуть подробнее — и я помогу разобраться.';
     }
+    // ТЕХ-ПРЕДОХРАНИТЕЛЬ ФЕЙК-НОМЕРА: клиент прислал что-то похожее на телефон, но
+    // normalizePhone отбил (мало разных цифр 1111111111, 9999999999 и т.п.) — модель
+    // при этом всё равно пишет «Спасибо, записала». Перезаписываем ответ.
+    // Detect "похоже на номер": последовательность 10-11 цифр (с возможными разделителями)
+    // где 4+ подряд одинаковых цифр ИЛИ всего <4 разных цифр.
+    const _msgDigits = String(msg || '').replace(/\D/g, '');
+    const _looksLikePhone = _msgDigits.length >= 10 && _msgDigits.length <= 13;
+    const _phoneParsed = detectContact(msg).phone;
+    if (_looksLikePhone && !_phoneParsed && /(записал|записан|номер|позвон|перезвон)/i.test(finalReply)) {
+      finalReply = 'Кажется, в номере опечатка — продиктуйте ещё раз, пожалуйста.';
+      console.log('[fake-phone-guard] tenant=' + req.tenant.slug + ' sid=' + sid + ' digits=' + _msgDigits.slice(0,15));
+    }
     await pool.query("INSERT INTO bot_404_log(session_id,direction,text,tenant_id) VALUES($1,'out',$2,$3)", [sid, finalReply, tid]);
     // usage из generateReply — реальные числа от AItunnel (prompt_tokens, completion_tokens, cost_rub, balance)
     const usage = out.usage || {};
