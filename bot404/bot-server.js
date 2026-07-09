@@ -407,6 +407,55 @@ async function avitoSend(tenant, chatId, text) {
   return r.json().catch(() => ({}));
 }
 
+// Транскрибация голосовых Avito через Whisper (AItunnel /v1/audio/transcriptions).
+// Клиенты БФЛ часто пишут голосом (лень набирать) — игнорировать = терять лид.
+async function whisperTranscribeAudio(buffer, mime) {
+  const AIKEY = process.env.OPENAI_API_KEY || process.env.AITUNNEL_API_KEY || '';
+  if (!AIKEY) throw new Error('no LLM key for STT');
+  const boundary = '----ZaryaBound' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  const ext = (mime || '').split('/')[1] || 'mp3';
+  const parts = [];
+  const push = (s) => parts.push(Buffer.from(s, 'utf8'));
+  push(`--${boundary}\r\nContent-Disposition: form-data; name="model"\r\n\r\nwhisper-1\r\n`);
+  push(`--${boundary}\r\nContent-Disposition: form-data; name="language"\r\n\r\nru\r\n`);
+  push(`--${boundary}\r\nContent-Disposition: form-data; name="response_format"\r\n\r\njson\r\n`);
+  push(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="voice.${ext}"\r\nContent-Type: ${mime || 'audio/mpeg'}\r\n\r\n`);
+  parts.push(buffer);
+  push(`\r\n--${boundary}--\r\n`);
+  const body = Buffer.concat(parts);
+  const r = await fetch('https://api.aitunnel.ru/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + AIKEY, 'Content-Type': 'multipart/form-data; boundary=' + boundary },
+    body,
+  });
+  if (!r.ok) {
+    const t = await r.text().catch(() => '');
+    throw new Error('whisper HTTP ' + r.status + ' ' + t.slice(0, 200));
+  }
+  const d = await r.json().catch(() => ({}));
+  return String(d.text || '').trim();
+}
+
+async function avitoTranscribeVoice(tenant, voiceId) {
+  const token = await avitoToken(tenant.avito_client_id, tenant.avito_client_secret);
+  // 1) URL файла из Avito API
+  const r1 = await fetch(`https://api.avito.ru/messenger/v1/accounts/${tenant.avito_user_id}/getVoiceFiles?voice_ids=${encodeURIComponent(voiceId)}`, {
+    method: 'GET',
+    headers: { 'Authorization': 'Bearer ' + token },
+  });
+  if (!r1.ok) throw new Error('avito getVoiceFiles HTTP ' + r1.status);
+  const d1 = await r1.json().catch(() => ({}));
+  const url = (d1 && d1.voices_urls && d1.voices_urls[voiceId]) || null;
+  if (!url) throw new Error('no voice url in response: ' + JSON.stringify(d1).slice(0, 200));
+  // 2) Скачать аудио
+  const r2 = await fetch(url);
+  if (!r2.ok) throw new Error('voice download HTTP ' + r2.status);
+  const buf = Buffer.from(await r2.arrayBuffer());
+  const mime = r2.headers.get('content-type') || 'audio/mpeg';
+  // 3) STT
+  return whisperTranscribeAudio(buf, mime);
+}
+
 // Подтягивает прежнюю переписку чата из Avito (сообщения оператора до подключения бота)
 // и сеет её в bot_404_log ОДИН раз — при первом входящем в незнакомый чат, чтобы бот видел
 // контекст, а не начинал квалификацию с нуля с уже общавшимся клиентом.
@@ -1569,12 +1618,23 @@ app.post('/api/avito/webhook/:secret', async (req, res) => {
     const chatId = v.chat_id;
     const accountId = v.user_id;                 // аккаунт-получатель (наш бот-аккаунт)
     const authorId = v.author_id;                // кто написал
-    const text = (v.content && v.content.text) ? String(v.content.text).trim() : '';
-    if (!chatId || !text) return;
+    if (!chatId) return;
     if (String(authorId) === String(accountId)) return;  // игнор собственных исходящих (эхо)
     // tenant по секрету пути (slug); грузим для seed истории и avitoSend (accountId из тела не доверяем)
     const t = await loadTenant(slug);
     if (!t) return;
+    // Текст сообщения: text | voice (транскрибируем через Whisper). Другие типы (image/item/link) пока пропускаем.
+    let text = (v.content && v.content.text) ? String(v.content.text).trim() : '';
+    if (!text && v.content && v.content.voice && v.content.voice.voice_id && t.avito_client_id) {
+      try {
+        text = await avitoTranscribeVoice(t, v.content.voice.voice_id);
+        if (text) console.log('[avito-voice] chat=' + chatId + ' transcribed=' + text.slice(0, 120));
+      } catch (e) {
+        console.warn('[avito-voice] fail chat=' + chatId + ':', e.message);
+        text = '';
+      }
+    }
+    if (!text) return;
     // Подтянуть прежнюю переписку оператора при ПЕРВОМ входящем в незнакомый чат — один раз
     if (t.avito_client_id) await avitoSeedHistory(t, chatId, t.tenant_id, text);
 
