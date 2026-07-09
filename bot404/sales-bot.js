@@ -294,7 +294,7 @@ function stripYesPrefix(s) {
 }
 
 function llmRace(m,t,x,ms,model,accum){ return Promise.race([ llm(m,t,x,model,accum), new Promise((_,r)=>setTimeout(()=>r(new Error('soft-timeout')),ms)) ]); }
-async function llmR(m,t,x,accum){ try{ return await llmRace(m,t,x,30000,undefined,accum); }catch(e){ return await llmRace(m,t,x,30000,undefined,accum); } }
+async function llmR(m,t,x,accum,model){ try{ return await llmRace(m,t,x,30000,model,accum); }catch(e){ return await llmRace(m,t,x,30000,model,accum); } }
 // Детектор эмоционального состояния клиента. Возвращает 'angry' | 'sad' | 'irritated' | null.
 function detectEmotion(msg) {
   const m = String(msg || '').toLowerCase();
@@ -336,7 +336,10 @@ export async function generateReply(history, userMsg, partnerBlock, factsBlock, 
   const emoDir = emotionPreamble(detectEmotion(userMsg));
   const factsDir = factsBlock || '';
   const tenantForPrompt = tenant ? Object.assign({}, tenant, { __kbContext: kbContext || '' }) : null;
-  const draft = await llmR([{ role: 'system', content: systemPrompt(tenantForPrompt) + langDir + partnerDir + factsDir + emoDir }].concat(history || []).concat([{ role: 'user', content: userMsg }]), 0.6, 350, usage);
+  // Кастом-тенанты (напр. Заря) генерят черновик СИЛЬНОЙ моделью (критик для них пропущен),
+  // иначе голый flash-lite плохо держит сложный промпт: не задаёт вопрос, теряет шаги.
+  const _draftModel = (tenant && tenant.slug && tenant.slug !== 'aisha' && tenant.slug !== 'default') ? (tenant.model || 'gemini-2.5-flash') : undefined;
+  const draft = await llmR([{ role: 'system', content: systemPrompt(tenantForPrompt) + langDir + partnerDir + factsDir + emoDir }].concat(history || []).concat([{ role: 'user', content: userMsg }]), 0.6, 350, usage, _draftModel);
   const priorBot = (history || []).filter(m => m.role === 'assistant').map(m => m.content).join('  ');
   const saidNums = Array.from(new Set((priorBot.match(/\d[\d  .,]*\s*(?:₽|%|руб|млн|тыс|диалог\w*|звонк\w*|лид\w*|сделок|мес\w*|дн[ея])/giu) || []).map(x => x.replace(/\s+/g, ' ').trim()))).slice(0, 15);
   const repeatGuard = saidNums.length ? ('\n\nЭти цифры/факты УЖЕ назывались в этом диалоге — НЕ повторяй их дословно (ОСОБЕННО цену и тариф), вместо повтора веди новым аргументом, вопросом про клиента или шагом к пилоту: ' + saidNums.join('; ')) : '';
