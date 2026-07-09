@@ -421,6 +421,21 @@ async function tenantSlugByAvitoUser(userId) {
   return slug;
 }
 
+// секрет вебхука (в пути) -> tenant slug. Секрет знает только Авито (мы даём URL с ним при
+// регистрации). Без секрета кто угодно, зная публичный avito_user_id, слал бы фейк-лиды.
+const _avitoSecretCache = new Map();
+async function tenantSlugByAvitoSecret(secret) {
+  if (!secret || String(secret).length < 12) return null;
+  const c = _avitoSecretCache.get(secret);
+  if (c && c.exp > Date.now()) return c.slug;
+  const r = await pool.query(
+    'SELECT t.slug FROM tenant_integrations i JOIN tenants t ON t.id = i.tenant_id WHERE i.avito_webhook_secret = $1 AND t.enabled = true LIMIT 1',
+    [String(secret)]);
+  const slug = r.rows[0]?.slug || null;
+  _avitoSecretCache.set(secret, { slug, exp: Date.now() + 60000 });
+  return slug;
+}
+
 const EMBED_KEY = process.env.OPENAI_API_KEY || process.env.BOT_LLM_KEY || '';
 const EMBED_URL = process.env.OPENAI_EMBED_URL || 'https://api.aitunnel.ru/v1/embeddings';
 const EMBED_MODEL = process.env.EMBEDDING_MODEL || 'text-embedding-3-small';
@@ -1455,7 +1470,10 @@ async function tgStopBotById(botRowId) {
 // Avito шлёт сюда события мессенджера (messenger/v3). Отвечаем 200 сразу,
 // обработку делаем асинхронно. Логику ответа переиспользуем через внутренний
 // вызов /api/sales-chat (память, лид, Bitrix — как у виджета).
-app.post('/api/avito/webhook', async (req, res) => {
+app.post('/api/avito/webhook/:secret', async (req, res) => {
+  // Авторизация вебхука: секрет в пути → тенант. Неверный секрет = 403, не обрабатываем.
+  const slug = await tenantSlugByAvitoSecret(req.params.secret).catch(() => null);
+  if (!slug) return res.status(403).json({ error: 'forbidden' });
   res.json({ ok: true }); // быстрый ACK — Avito ретраит на медленный ответ
   try {
     const body = req.body || {};
@@ -1468,9 +1486,7 @@ app.post('/api/avito/webhook', async (req, res) => {
     const text = (v.content && v.content.text) ? String(v.content.text).trim() : '';
     if (!chatId || !text) return;
     if (String(authorId) === String(accountId)) return;  // игнор собственных исходящих (эхо)
-
-    const slug = await tenantSlugByAvitoUser(accountId);
-    if (!slug) { console.warn('[avito] нет тенанта для account_id=' + accountId); return; }
+    // tenant уже определён по секрету пути (slug) — accountId из тела не доверяем
 
     // Полная логика бота — через внутренний вызов sales-chat (session = avito chat_id)
     const rr = await fetch('http://127.0.0.1:' + PORT + '/api/sales-chat', {
