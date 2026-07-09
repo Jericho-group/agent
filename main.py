@@ -196,6 +196,36 @@ def _check_admin(x_admin_token: str = Header(default="")):
             raise HTTPException(status_code=401, detail="Invalid admin token")
 
 
+def _check_bot404(x_admin_token: str = Header(default="")):
+    # Принимаем JWT либо legacy global-токены. Пускает любую JWT-роль (viewer/member/admin/root).
+    if not x_admin_token:
+        raise HTTPException(status_code=401, detail="Missing X-Admin-Token")
+    claims = _decode_jwt(x_admin_token)
+    if claims:
+        return  # JWT валиден
+    if (settings.admin_token and _secrets_mod.compare_digest(x_admin_token, settings.admin_token)) \
+       or (settings.bot404_token and _secrets_mod.compare_digest(x_admin_token, settings.bot404_token)):
+        return  # Legacy токен
+    raise HTTPException(status_code=401, detail="Invalid admin token")
+
+
+def _check_bot404_admin(x_admin_token: str = Header(default="")):
+    """Как _check_bot404, но только для write-операций: role in ('admin','root') или legacy env-токены.
+    viewer/member получат 403."""
+    if not x_admin_token:
+        raise HTTPException(status_code=401, detail="Missing X-Admin-Token")
+    claims = _decode_jwt(x_admin_token)
+    if claims:
+        role = claims.get("role", "viewer")
+        if role in ("admin", "root"):
+            return
+        raise HTTPException(status_code=403, detail="Admin role required")
+    if (settings.admin_token and _secrets_mod.compare_digest(x_admin_token, settings.admin_token)) \
+       or (settings.bot404_token and _secrets_mod.compare_digest(x_admin_token, settings.bot404_token)):
+        return  # Legacy env-токены = root
+    raise HTTPException(status_code=401, detail="Invalid admin token")
+
+
 def _check_internal(x_internal_secret: str = Header(default="")):
     if not _INTERNAL_SECRET:
         raise HTTPException(status_code=503, detail="INTERNAL_API_SECRET not configured")
@@ -427,36 +457,6 @@ def _accounts():
 class _LoginBody(_BaseModel):
     login: str
     password: str
-
-
-def _check_bot404(x_admin_token: str = Header(default="")):
-    # Принимаем JWT либо legacy global-токены. Пускает любую JWT-роль (viewer/member/admin/root).
-    if not x_admin_token:
-        raise HTTPException(status_code=401, detail="Missing X-Admin-Token")
-    claims = _decode_jwt(x_admin_token)
-    if claims:
-        return  # JWT валиден
-    if (settings.admin_token and _secrets_mod.compare_digest(x_admin_token, settings.admin_token)) \
-       or (settings.bot404_token and _secrets_mod.compare_digest(x_admin_token, settings.bot404_token)):
-        return  # Legacy токен
-    raise HTTPException(status_code=401, detail="Invalid admin token")
-
-
-def _check_bot404_admin(x_admin_token: str = Header(default="")):
-    """Как _check_bot404, но только для write-операций: role in ('admin','root') или legacy env-токены.
-    viewer/member получат 403."""
-    if not x_admin_token:
-        raise HTTPException(status_code=401, detail="Missing X-Admin-Token")
-    claims = _decode_jwt(x_admin_token)
-    if claims:
-        role = claims.get("role", "viewer")
-        if role in ("admin", "root"):
-            return
-        raise HTTPException(status_code=403, detail="Admin role required")
-    if (settings.admin_token and _secrets_mod.compare_digest(x_admin_token, settings.admin_token)) \
-       or (settings.bot404_token and _secrets_mod.compare_digest(x_admin_token, settings.bot404_token)):
-        return  # Legacy env-токены = root
-    raise HTTPException(status_code=401, detail="Invalid admin token")
 
 
 async def _tenant_id_from_token(x_admin_token: str) -> int | None:
