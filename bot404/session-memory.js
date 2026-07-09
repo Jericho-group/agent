@@ -48,6 +48,8 @@ __RECENT_DIALOG__
 - new_pains (array of strings): новые боли, кратко 2-4 слова каждое. ["менеджеры сливают лиды", "конверсия упала"].
 - new_objections (array of strings): новые возражения. ["дорого", "у нас уже Битрикс"].
 
+ВАЖНО: поля industry/team_size/volume_per_day/avg_check_rub/current_crm/current_telephony/budget_rub/decision_role/product_interest — ТОЛЬКО для B2B-продаж бизнесу. Если клиент физлицо и речь о личных долгах, банкротстве, услуге гражданину — эти поля НЕ заполняй вообще. Доход, зарплату, сумму долга клиента НИКОГДА не пиши в volume_per_day, avg_check_rub, budget_rub или contact_email. Для таких диалогов заполняй только new_pains, new_objections и contact_phone/email/telegram.
+
 Если в последнем сообщении НИЧЕГО нового — верни {}.
 ОТВЕТ строго JSON, без преамбулы.`;
 
@@ -75,7 +77,7 @@ function buildCurrentState(facts) {
 function buildRecentDialog(history, latestUserMsg) {
   const lines = [];
   for (const m of (history || []).slice(-8)) {
-    const role = m.role === 'user' ? 'Клиент' : 'Аиша';
+    const role = m.role === 'user' ? 'Клиент' : 'Специалист';
     lines.push(role + ': ' + String(m.content || '').slice(0, 400));
   }
   lines.push('Клиент: ' + String(latestUserMsg || '').slice(0, 400));
@@ -151,7 +153,7 @@ export function buildFactsBlock(facts) {
   return block;
 }
 
-const SUMMARY_PROMPT_TEMPLATE = `Ты — стенографист продаж. Сожми диалог клиент↔Аиша в 1-2 короткие строки (max 350 символов) на русском.
+const SUMMARY_PROMPT_TEMPLATE = `Ты — стенографист диалога. Сожми диалог клиент↔специалист в 1-2 короткие строки (max 350 символов) на русском. НЕ используй имён собственных бота — пиши «специалист».
 Что важно сохранить: о чём договорились / какие темы уже обсудили / какие возражения клиент уже снял / на каком этапе воронки находимся / какие обещания дал бот (например "пришлю КП на email").
 Что не нужно: цифры (они в отдельных слотах), приветствия, шаблонные фразы.
 
@@ -212,7 +214,7 @@ export async function maybeUpdateSummary(pool, sid, tid, history) {
     if (inCount - lastCount < 5) return; // не дотянули до 5 новых in-сообщений
 
     const dialog = (history || []).slice(-12).map(m => {
-      const who = m.role === 'user' ? 'Клиент' : 'Аиша';
+      const who = m.role === 'user' ? 'Клиент' : 'Специалист';
       return who + ': ' + String(m.content || '').slice(0, 300);
     }).join('\n');
 
