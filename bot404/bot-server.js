@@ -803,6 +803,21 @@ function countDigits(s) {
   const m = String(s || '').match(/\d/g);
   return m ? m.length : 0;
 }
+// Guard: gemini-flash упрямо начинает ответ с «Поняла./Понятно./Хорошо./Спасибо, записала» — типичный
+// ИИ-акknowledgment, живой оператор так не пишет. Правило 17 промпта проигрывает. Режем эти
+// префиксы прямо в reply, оставляем суть.
+const AI_ACK_PREFIX_RE = /^\s*(?:поняла|понятно|понял|поняли|хорошо|ясно|вижу|отлично|замечательно|прекрасно|ок|окей|спасибо(?:[,.]?\s+(?:записала?|принял[аи]?))?)[,.!\s]+/i;
+function stripAiAckPrefix(reply) {
+  if (typeof reply !== 'string' || !reply) return reply;
+  const m = reply.match(AI_ACK_PREFIX_RE);
+  if (!m) return reply;
+  const stripped = reply.slice(m[0].length).replace(/^\s+/, '');
+  // Если после снятия осталась пустая строка или слишком короткая (< 15 симв) — возвращаем оригинал,
+  // чтобы не обрезать что-то полезное.
+  if (stripped.length < 15) return reply;
+  // Первая буква заглавной
+  return stripped.charAt(0).toUpperCase() + stripped.slice(1);
+}
 // Утечка/пересказ системного промпта: бот НЕ должен раскрывать свои правила, ограничения,
 // цель или признаваться, что он бот/следует инструкции. Ловим характерные фразы-пересказы.
 const PROMPT_LEAK_RE = /мне\s+запрещено|не\s+могу\s+задавать\s+два|нельзя\s+(?:отправлять|писать)\s+два|по\s+инструкц|мо[ий]\s+(?:инструкц|правил|промпт|ограничен)|систем\w*\s*промпт|признавать[,\s]+что\s+я\s+бот|не\s+признавать|я\s+(?:—\s*)?(?:бот|ии|искусственн|языкова|нейросет)|моя\s+главная\s+цель\s+[—-]\s*получить/i;
@@ -841,6 +856,7 @@ app.post('/api/sales-chat', resolveTenant, async (req, res) => {
     const msg = String((req.body && req.body.message) || '').trim();
     // Phone-ack guard (клиентские тенанты): если бот подтверждает получение номера, а
     // в клиентском сообщении нет 10+ цифр — заменить на просьбу продиктовать цифрами.
+    // Плюс: срезать ИИ-акknowledgment префикс «Поняла./Хорошо./Спасибо, записала» — правило 17.
     if (!isInternalTenant(req.tenant)) {
       const _prevJson2 = res.json.bind(res);
       res.json = (obj) => {
@@ -848,6 +864,12 @@ app.post('/api/sales-chat', resolveTenant, async (req, res) => {
           console.warn('[phone-ack-guard] tenant=' + req.tenant.slug + ' sid=' + sid + ' digits=' + countDigits(msg) + ' msg=' + String(msg).slice(0, 80));
           obj.reply = 'Простите, не разобрала номер — продиктуйте, пожалуйста, цифрами, например 8 916 123 45 67.';
           obj._phone_ack_guard = true;
+        } else if (obj && typeof obj.reply === 'string') {
+          const stripped = stripAiAckPrefix(obj.reply);
+          if (stripped !== obj.reply) {
+            obj.reply = stripped;
+            obj._ack_stripped = true;
+          }
         }
         return _prevJson2(obj);
       };
