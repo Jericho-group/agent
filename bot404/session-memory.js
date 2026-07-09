@@ -84,6 +84,59 @@ function buildRecentDialog(history, latestUserMsg) {
   return lines.join('\n');
 }
 
+// Восстанавливает обрезанный JSON-объект от LLM (flash-lite часто рубит по max_tokens
+// посреди строки или массива). Обрезаем до последнего целого поля, дозакрываем скобки.
+function tryRepairJSON(s) {
+  if (!s || typeof s !== 'string') return null;
+  const start = s.indexOf('{');
+  if (start < 0) return null;
+  // Стриппим markdown-фенсы если есть
+  let src = s.slice(start);
+  const endFence = src.lastIndexOf('```');
+  if (endFence > 0) src = src.slice(0, endFence);
+  try { return JSON.parse(src); } catch {}
+  // Идём по строке, считаем depth скобок и внутри-ли-строки; ищем последнее закрытие корневого объекта
+  let depth = 0, inStr = false, esc = false, lastRootClose = -1;
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (esc) { esc = false; continue; }
+    if (inStr) {
+      if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') { inStr = true; }
+    else if (ch === '{' || ch === '[') depth++;
+    else if (ch === '}' || ch === ']') { depth--; if (depth === 0 && ch === '}') lastRootClose = i; }
+  }
+  if (lastRootClose > 0) {
+    try { return JSON.parse(src.slice(0, lastRootClose + 1)); } catch {}
+  }
+  // Обрезано — обрезаем до последней запятой перед последним ключом и дозакрываем
+  let repair = src;
+  if (inStr) {
+    // закрываем висящую строку
+    const lastQuote = repair.lastIndexOf('"');
+    if (lastQuote > 0) repair = repair.slice(0, lastQuote); // отбрасываем неполное строковое значение
+    // теперь надо срезать до последней ',' или '{'
+  }
+  const lastComma = repair.lastIndexOf(',');
+  const lastOpenBrace = repair.lastIndexOf('{');
+  const cutAt = Math.max(lastComma, lastOpenBrace);
+  if (cutAt > 0) repair = repair.slice(0, cutAt);
+  // подсчитаем сколько скобок надо дозакрыть
+  let d = 0, iS = false, e2 = false;
+  for (const ch of repair) {
+    if (e2) { e2 = false; continue; }
+    if (iS) { if (ch === '\\') e2 = true; else if (ch === '"') iS = false; continue; }
+    if (ch === '"') iS = true;
+    else if (ch === '{' || ch === '[') d++;
+    else if (ch === '}' || ch === ']') d--;
+  }
+  if (d > 0) repair += '}'.repeat(d);
+  try { return JSON.parse(repair); } catch { return null; }
+}
+
 async function callExtract(prompt) {
   return new Promise((resolve) => {
     const body = JSON.stringify({
@@ -91,7 +144,7 @@ async function callExtract(prompt) {
       messages: [{ role: 'user', content: prompt }],
       temperature: 0,
       response_format: { type: 'json_object' },
-      max_tokens: 400,
+      max_tokens: 800,
     });
     const opts = {
       method: 'POST',
@@ -111,12 +164,18 @@ async function callExtract(prompt) {
       let data = '';
       res.on('data', (c) => { data += c; });
       res.on('end', () => {
+        let raw = '';
         try {
           const j = JSON.parse(data);
-          const raw = j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content || '{}';
+          raw = j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content || '{}';
           resolve(JSON.parse(raw));
         } catch (e) {
-          console.warn('[session-facts] parse fail:', String(e?.message || e).slice(0, 100), 'raw:', data.slice(0, 200));
+          const repaired = tryRepairJSON(raw);
+          if (repaired && typeof repaired === 'object') {
+            resolve(repaired);
+            return;
+          }
+          console.warn('[session-facts] parse fail:', String(e?.message || e).slice(0, 100), 'raw:', String(raw).slice(0, 300));
           resolve({});
         }
       });
