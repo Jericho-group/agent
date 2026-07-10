@@ -1545,7 +1545,7 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
           <symbol id="ic-leads" viewBox="0 0 24 24"><path d="M20 7h-3V5a2 2 0 0 0-2-2H9a2 2 0 0 0-2 2v2H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V8a1 1 0 0 0-1-1zM9 5h6v2H9V5z"/></symbol>
         </defs>
       </svg>
-      <template x-for="item in navItems" :key="item.id">
+      <template x-for="item in (isEmbed ? navItems.filter(n => ['conversations','leads','kb'].includes(n.id)) : navItems)" :key="item.id">
         <button @click="page=item.id; sidebarOpen=false"
           :style="page===item.id?'background:#E3F5ED; color:#085041;':'color:#5A5A60;'"
           class="aisha-nav-btn w-full flex items-center gap-3 px-3 py-2.5 rounded-[10px] text-[13.5px] font-medium transition-all">
@@ -1571,7 +1571,7 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
         </svg>
         <span class="sidebar-expanded-only" x-text="sidebarCollapsed?'Развернуть':'Свернуть'"></span>
       </button>
-      <div class="mt-2 text-[11px] sidebar-expanded-only" style="color:#A0A0A6;">Дирижёр</div>
+      <div x-show="!isEmbed" class="mt-2 text-[11px] sidebar-expanded-only" style="color:#A0A0A6;">Дирижёр</div>
     </div>
   </div>
 
@@ -1602,7 +1602,7 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
           <kbd class="text-[10px] px-1.5 py-0.5 rounded" style="background:#FFFFFF; border:0.5px solid #E2E2E2; color:#8A8A90; font-family:ui-monospace,monospace;">⌘K</kbd>
         </button>
       </div>
-      <div class="flex items-center gap-2">
+      <div x-show="!isEmbed" class="flex items-center gap-2">
       <button @click="logout()" class="flex items-center gap-2 text-[13px] transition px-3 py-2 rounded-[10px]" style="color:#5A5A60;" onmouseover="this.style.background='#F4F6F4'; this.style.color='#D03A2E'" onmouseout="this.style.background='transparent'; this.style.color='#5A5A60'">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
         <span class="md-hide" x-text="loginName ? ('Выйти · '+loginName) : 'Выйти'"></span>
@@ -4093,7 +4093,7 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
 <script>
 function adminApp() {
   return {
-    authenticated: false, password: '', loginName: '', loginError: '', token: '', scope: 'full',
+    authenticated: false, password: '', loginName: '', loginError: '', token: '', scope: 'full', isEmbed: false,
     b4Dialogs: [], b4Sel: null, b4Msgs: [], b4Leads: [], b4Tab: 'dialogs',
     aishaKb: { kb:'', scripts:'' },
     aishaStats: { leads_total: 0, leads_today: 0, sessions_total: 0, messages_24h: 0 },
@@ -5736,6 +5736,34 @@ function adminApp() {
     },
 
     async init() {
+      // 0. PRM iframe SSO: если ?embed=1 — сессия уже установлена cookie через /embed;
+      //    подхватываем JWT через /admin/api/whoami и стартуем сразу в bot404-скоупе.
+      const embedFlag = new URLSearchParams(location.search).get('embed') === '1';
+      if (embedFlag) {
+        try {
+          const r = await fetch('/admin/api/whoami', { credentials: 'include' });
+          if (r.ok) {
+            const d = await r.json();
+            this.token = d.token;
+            this.scope = d.scope || 'bot404';
+            this.tenantSlug = '';
+            this.authenticated = true;
+            this.isEmbed = true;
+            this.page = 'conversations';
+            this.theme = '404';
+            document.documentElement.classList.add('prm-embed');
+            await this.loadBranding?.();
+            await this.loadAll?.();
+            this.$watch('page', p => {
+              if (p === 'conversations') this.loadSessions();
+              if (p === 'kb') this.loadKbDocs();
+              if (p === 'leads') this.loadLeads();
+            });
+            if (this.authenticated) this.startPolling?.();
+            return;
+          }
+        } catch (_) { /* fallthrough — обычный login */ }
+      }
       // 1. Сначала пробуем impersonate (если ?imp= в URL)
       if (await this.tryImpersonateFromUrl()) {
         return;
