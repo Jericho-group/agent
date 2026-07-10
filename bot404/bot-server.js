@@ -412,14 +412,18 @@ async function avitoSend(tenant, chatId, text) {
 // Модель заметно лучше на русской разговорной речи чем whisper-1.
 // Клиенты БФЛ часто пишут голосом (лень набирать) — игнорировать = терять лид.
 async function _whisperCall(buffer, mime, model, AIKEY) {
+  // Санитайз: MediaRecorder в браузере отдаёт 'audio/webm;codecs=opus' —
+  // Whisper на AItunnel не парсит codecs-суффикс и 400-ит. Отбрасываем всё
+  // после первого ';' + пробелов.
+  const cleanMime = String(mime || '').split(';')[0].trim() || 'audio/mpeg';
   const boundary = '----ZaryaBound' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-  const ext = (mime || '').split('/')[1] || 'mp3';
+  const ext = (cleanMime.split('/')[1] || 'mp3').trim();
   const parts = [];
   const push = (s) => parts.push(Buffer.from(s, 'utf8'));
   push(`--${boundary}\r\nContent-Disposition: form-data; name="model"\r\n\r\n${model}\r\n`);
   push(`--${boundary}\r\nContent-Disposition: form-data; name="language"\r\n\r\nru\r\n`);
   push(`--${boundary}\r\nContent-Disposition: form-data; name="response_format"\r\n\r\njson\r\n`);
-  push(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="voice.${ext}"\r\nContent-Type: ${mime || 'audio/mpeg'}\r\n\r\n`);
+  push(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="voice.${ext}"\r\nContent-Type: ${cleanMime}\r\n\r\n`);
   parts.push(buffer);
   push(`\r\n--${boundary}--\r\n`);
   const body = Buffer.concat(parts);
@@ -946,16 +950,49 @@ function countDigits(s) {
 // ИИ-акknowledgment, живой оператор так не пишет. Правило 17 промпта проигрывает. Режем эти
 // префиксы прямо в reply, оставляем суть.
 const AI_ACK_PREFIX_RE = /^\s*(?:поняла|понятно|понял|поняли|хорошо|ясно|вижу|отлично|замечательно|прекрасно|ок|окей|спасибо(?:[,.]?\s+(?:записала?|принял[аи]?))?)[,.!\s]+/i;
+
+// Guard 2: канцелярские фразы-паразиты в СЕРЕДИНЕ ответа. Правило 17 в промпте
+// их запрещает, но gemini-flash время от времени всё равно вставляет.
+// Пример: «А сколько тратите?» — хорошо; «Уточните, пожалуйста, а сколько тратите?» — плохо.
+// Убираем эти хвосты — оставшийся вопрос сам по себе корректный.
+// \b не работает для кириллицы (ASCII-word-boundary), поэтому без границы —
+// «уточните» как подстрока других русских слов не встречается.
+const AI_FILLER_MIDDLE_RE = new RegExp(
+  '(?:' +
+    '[Уу]точните,?\\s+пожалуйста,?\\s*|' +
+    '[Сс]кажите,?\\s+пожалуйста,?\\s*|' +
+    '[Пп]одскажите,?\\s+пожалуйста,?\\s*|' +
+    '[Пп]озвольте\\s+(?:уточнить|узнать|спросить),?\\s*|' +
+    '[Рр]азрешите\\s+(?:спросить|уточнить),?\\s*|' +
+    '[Хх]очу\\s+задать\\s+вопрос,?\\s*|' +
+    '[Хх]очу\\s+уточнить,?\\s*|' +
+    '[Дд]авайте\\s+разберёмся,?\\s*|' +
+    '[Пп]озвольте\\s+подсказать,?\\s*|' +
+    '[Пп]озвольте\\s+помочь,?\\s*|' +
+    '[Чч]то\\s+касается\\s+вашей\\s+ситуации,?\\s*' +
+  ')', 'g');
+
+function stripAiFillers(reply) {
+  if (typeof reply !== 'string' || !reply) return reply;
+  const cleaned = reply.replace(AI_FILLER_MIDDLE_RE, '').replace(/\s{2,}/g, ' ').trim();
+  if (cleaned.length < 15) return reply;
+  // Восстановить заглавную если фраза начиналась с канцеляризма и он был в самом начале
+  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+}
+
 function stripAiAckPrefix(reply) {
   if (typeof reply !== 'string' || !reply) return reply;
-  const m = reply.match(AI_ACK_PREFIX_RE);
-  if (!m) return reply;
-  const stripped = reply.slice(m[0].length).replace(/^\s+/, '');
-  // Если после снятия осталась пустая строка или слишком короткая (< 15 симв) — возвращаем оригинал,
-  // чтобы не обрезать что-то полезное.
-  if (stripped.length < 15) return reply;
-  // Первая буква заглавной
-  return stripped.charAt(0).toUpperCase() + stripped.slice(1);
+  let r = reply;
+  const m = r.match(AI_ACK_PREFIX_RE);
+  if (m) {
+    const stripped = r.slice(m[0].length).replace(/^\s+/, '');
+    if (stripped.length >= 15) {
+      r = stripped.charAt(0).toUpperCase() + stripped.slice(1);
+    }
+  }
+  // Второй проход — убираем канцеляризмы в середине.
+  r = stripAiFillers(r);
+  return r;
 }
 // Утечка/пересказ системного промпта: бот НЕ должен раскрывать свои правила, ограничения,
 // цель или признаваться, что он бот/следует инструкции. Ловим характерные фразы-пересказы.
