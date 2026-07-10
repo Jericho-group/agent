@@ -407,16 +407,18 @@ async function avitoSend(tenant, chatId, text) {
   return r.json().catch(() => ({}));
 }
 
-// Транскрибация голосовых Avito через Whisper (AItunnel /v1/audio/transcriptions).
+// Транскрибация голосовых через Whisper large-v3-turbo (AItunnel).
+// Модель заметно лучше на русской разговорной речи чем whisper-1.
 // Клиенты БФЛ часто пишут голосом (лень набирать) — игнорировать = терять лид.
 async function whisperTranscribeAudio(buffer, mime) {
   const AIKEY = process.env.OPENAI_API_KEY || process.env.AITUNNEL_API_KEY || '';
   if (!AIKEY) throw new Error('no LLM key for STT');
+  const model = process.env.STT_MODEL || 'whisper-large-v3-turbo';
   const boundary = '----ZaryaBound' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   const ext = (mime || '').split('/')[1] || 'mp3';
   const parts = [];
   const push = (s) => parts.push(Buffer.from(s, 'utf8'));
-  push(`--${boundary}\r\nContent-Disposition: form-data; name="model"\r\n\r\nwhisper-1\r\n`);
+  push(`--${boundary}\r\nContent-Disposition: form-data; name="model"\r\n\r\n${model}\r\n`);
   push(`--${boundary}\r\nContent-Disposition: form-data; name="language"\r\n\r\nru\r\n`);
   push(`--${boundary}\r\nContent-Disposition: form-data; name="response_format"\r\n\r\njson\r\n`);
   push(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="voice.${ext}"\r\nContent-Type: ${mime || 'audio/mpeg'}\r\n\r\n`);
@@ -454,6 +456,63 @@ async function avitoTranscribeVoice(tenant, voiceId) {
   const mime = r2.headers.get('content-type') || 'audio/mpeg';
   // 3) STT
   return whisperTranscribeAudio(buf, mime);
+}
+
+// Описание содержимого картинки через vision-модель (AItunnel /v1/chat/completions).
+// Реальные клиенты БФЛ шлют фото документов (решения суда, справки, паспорта) —
+// без описания бот не может ссылаться на факт, что клиент прислал документ.
+async function visionDescribeImage(buffer, mime) {
+  const AIKEY = process.env.OPENAI_API_KEY || process.env.AITUNNEL_API_KEY || '';
+  if (!AIKEY) throw new Error('no LLM key for vision');
+  const model = process.env.VISION_MODEL || 'gemini-2.5-flash';
+  const dataUrl = `data:${mime || 'image/jpeg'};base64,${buffer.toString('base64')}`;
+  const prompt = 'Опиши коротко (2-4 короткие фразы) что на этой картинке. Если это документ — назови тип (решение суда, справка, договор, скрин переписки, скрин чата, паспорт и т.п.) и вытащи КЛЮЧЕВЫЕ факты: суммы, даты, имена, номера, статьи, стороны. Если фото — опиши что видно. Не додумывай того чего нет. Отвечай русским, без вводных фраз, только суть.';
+  const body = {
+    model,
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'text', text: prompt },
+        { type: 'image_url', image_url: { url: dataUrl } },
+      ],
+    }],
+    max_tokens: 300,
+    temperature: 0.1,
+  };
+  const r = await fetch('https://api.aitunnel.ru/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + AIKEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const t = await r.text().catch(() => '');
+    throw new Error('vision HTTP ' + r.status + ' ' + t.slice(0, 200));
+  }
+  const d = await r.json().catch(() => ({}));
+  const txt = d?.choices?.[0]?.message?.content || '';
+  return String(txt).trim();
+}
+
+// Скачивает картинку из Avito content.image (объект с sizes: {'640x480': 'https://...'}),
+// выбирает самое большое разрешение и отдаёт описание через vision-модель.
+async function avitoDescribeImage(tenant, imageContent) {
+  const sizes = (imageContent && imageContent.sizes) || {};
+  const urls = Object.entries(sizes);
+  if (!urls.length) throw new Error('no image sizes in content');
+  // Выбираем URL самого большого размера (по числу пикселей в ключе '640x480')
+  urls.sort((a, b) => {
+    const parse = (k) => {
+      const m = String(k).match(/(\d+)x(\d+)/);
+      return m ? parseInt(m[1]) * parseInt(m[2]) : 0;
+    };
+    return parse(b[0]) - parse(a[0]);
+  });
+  const bestUrl = urls[0][1];
+  const r = await fetch(bestUrl);
+  if (!r.ok) throw new Error('image download HTTP ' + r.status);
+  const buf = Buffer.from(await r.arrayBuffer());
+  const mime = r.headers.get('content-type') || 'image/jpeg';
+  return visionDescribeImage(buf, mime);
 }
 
 // Подтягивает прежнюю переписку чата из Avito (сообщения оператора до подключения бота)
@@ -1623,15 +1682,30 @@ app.post('/api/avito/webhook/:secret', async (req, res) => {
     // tenant по секрету пути (slug); грузим для seed истории и avitoSend (accountId из тела не доверяем)
     const t = await loadTenant(slug);
     if (!t) return;
-    // Текст сообщения: text | voice (транскрибируем через Whisper). Другие типы (image/item/link) пока пропускаем.
+    // Текст сообщения: text | voice (Whisper) | image (Vision).
+    // Другие типы (item/link) пока пропускаем.
     let text = (v.content && v.content.text) ? String(v.content.text).trim() : '';
     if (!text && v.content && v.content.voice && v.content.voice.voice_id && t.avito_client_id) {
       try {
-        text = await avitoTranscribeVoice(t, v.content.voice.voice_id);
-        if (text) console.log('[avito-voice] chat=' + chatId + ' transcribed=' + text.slice(0, 120));
+        const transcript = await avitoTranscribeVoice(t, v.content.voice.voice_id);
+        if (transcript) {
+          text = transcript;
+          console.log('[avito-voice] chat=' + chatId + ' transcribed=' + text.slice(0, 120));
+        }
       } catch (e) {
         console.warn('[avito-voice] fail chat=' + chatId + ':', e.message);
-        text = '';
+      }
+    }
+    if (!text && v.content && v.content.image) {
+      try {
+        const desc = await avitoDescribeImage(t, v.content.image);
+        if (desc) {
+          // Подаём боту как метку что клиент прислал документ — LLM ссылается на это в диалоге
+          text = `[Клиент прислал изображение — ${desc}]`;
+          console.log('[avito-image] chat=' + chatId + ' described=' + desc.slice(0, 150));
+        }
+      } catch (e) {
+        console.warn('[avito-image] fail chat=' + chatId + ':', e.message);
       }
     }
     if (!text) return;
