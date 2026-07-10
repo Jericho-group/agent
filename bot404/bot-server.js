@@ -168,7 +168,6 @@ async function maybeSendBudgetAlert(tenant, kind, used, limit, periodKey) {
     const set = await redis.set(flagKey, '1', 'NX', 'EX', kind === 'day_tokens' ? 86400 : 35 * 86400);
     if (set !== 'OK') return; // уже отправлен этим окном
   } catch (_) { return; }
-  const to = tenant.branding_manager_email || ADMIN_NOTIFY_EMAIL;
   const subj = `[${tenant.slug}] ${pct}% ${kind === 'day_tokens' ? 'дневного лимита токенов' : 'месячного бюджета'}`;
   const body =
     `Тенант: ${tenant.name} (${tenant.slug})\n` +
@@ -179,7 +178,9 @@ async function maybeSendBudgetAlert(tenant, kind, used, limit, periodKey) {
      bucket === '95'  ? '⚠️ До исчерпания осталось <5%.\n' :
                         'Информационно: пройдена отметка 80%.\n') +
     `\nУправление лимитами: ` + BOT_BASE_URL + `/admin/root`;
-  sendAdminNotify(subj, body).catch(() => {});
+  // Роутинг тот же что для лидов: Аиша → 404ai, клиент с branding_manager_email → на него,
+  // иначе — молча (без спама на 404ai по чужим тенантам).
+  notifyLeadRouted(tenant, subj, body).catch(() => {});
 }
 
 // recordUsage — после LLM-вызова: токены + копейки. Пишем в Redis (быстро) и в usage_events.
@@ -679,6 +680,20 @@ async function sendAdminNotify(subject, text) {
   return sendNotify(ADMIN_NOTIFY_EMAIL, subject, text);
 }
 
+// Роутинг уведомлений «Новый лид» по правилам разделения тенантов:
+//   • Аиша (внутренний бот 404ai) → на 404ai-email (ADMIN_NOTIFY_EMAIL).
+//   • Клиентские тенанты (Заря, PRM, Orchestra и т.д.) — на свой branding_manager_email
+//     если задан; иначе не шлём (лид всё равно в БД и виден в ЛК тенанта + пушится
+//     в Bitrix если у тенанта настроен вебхук).
+// Клиенты не должны видеть свои лиды на нашей общей 404ai-почте.
+async function notifyLeadRouted(tenant, subject, text) {
+  const isAisha = tenant && (tenant.slug === 'aisha' || tenant.slug === 'default');
+  if (isAisha) return sendNotify(ADMIN_NOTIFY_EMAIL, subject, text);
+  const to = tenant && tenant.branding_manager_email;
+  if (to) return sendNotify(to, subject, text);
+  return; // молча — не наш адрес и не задан клиентский
+}
+
 const rlMap = new Map();
 setInterval(() => { const now = Date.now(); for (const [k, v] of rlMap) { const f = v.filter(t => now - t < 3600000); if (!f.length) rlMap.delete(k); else rlMap.set(k, f); } }, 600000);
 // Whitelist IP'ов из env RATE_LIMIT_WHITELIST (через запятую). Для них rate-limit отключён — тестовые прогоны.
@@ -1040,12 +1055,12 @@ app.post('/api/sales-chat', resolveTenant, async (req, res) => {
         const ins = await pool.query("INSERT INTO bot_404_leads(session_id,phone,email,telegram,note,tenant_id) SELECT $1,$2,$3,$4,$5,$6 WHERE NOT EXISTS (SELECT 1 FROM bot_404_leads WHERE session_id=$1 AND tenant_id=$6 AND COALESCE(phone,'x')=COALESCE($2,'x') AND COALESCE(email,'y')=COALESCE($3,'y') AND COALESCE(telegram,'z')=COALESCE($4,'z')) RETURNING id", [sid, c.phone, c.email, c.telegram, transcript, tid]).catch((e) => { console.error('[lead-insert] fail tenant=' + tid + ' sid=' + sid + ':', e.message); return { rows: [] }; });
         if (ins && ins.rows && ins.rows.length) {
           const lkLink = ADMIN_BASE_URL + '/admin?session=' + encodeURIComponent(sid);
-          sendAdminNotify(
+          notifyLeadRouted(req.tenant,
             "Новый лид [" + req.tenant.slug + "]",
             "Тенант: " + req.tenant.name + "\nТелефон: " + (c.phone || "-") + "\nEmail: " + (c.email || "-") + "\nTelegram: " + (c.telegram || "-") +
             "\n\n--- Диалог ---\n" + transcript +
             "\n\n──────────\nОткрыть диалог в ЛК: " + lkLink
-          );
+          ).catch(() => {});
           // Авто-склейка с прошлыми сессиями того же клиента (по контакту)
           mergeFactsFromContact(pool, sid, tid, c).catch(() => {});
           // Push лида в Bitrix24, если у тенанта настроен вебхук (не блокируем ответ)
@@ -1385,15 +1400,15 @@ async function processTgUpdate(upd, ctx) {
       ).catch((e) => { console.error('[lead-insert:tg] fail tenant=' + tid + ' sid=' + sid + ':', e.message); return { rows: [] }; });
       if (ins.rows?.length) {
         const lkLink = ADMIN_BASE_URL + '/admin?session=' + encodeURIComponent(sid);
-        sendAdminNotify(
-          'Новый лид из Telegram',
+        notifyLeadRouted(tenant,
+          'Новый лид из Telegram [' + (tenant.slug || '?') + ']',
           'TG: ' + (tgUsername || chatId) +
           '\nИмя: ' + (userName || '-') +
           '\nТелефон: ' + (c.phone || '-') +
           '\nEmail: ' + (c.email || '-') +
           '\n\nСообщение: ' + text +
           '\n\n──────────\nОткрыть диалог в ЛК: ' + lkLink
-        );
+        ).catch(() => {});
         // Авто-склейка с прошлыми сессиями того же клиента
         mergeFactsFromContact(pool, sid, tid, c).catch(() => {});
       }
