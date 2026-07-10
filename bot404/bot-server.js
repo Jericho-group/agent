@@ -410,10 +410,7 @@ async function avitoSend(tenant, chatId, text) {
 // Транскрибация голосовых через Whisper large-v3-turbo (AItunnel).
 // Модель заметно лучше на русской разговорной речи чем whisper-1.
 // Клиенты БФЛ часто пишут голосом (лень набирать) — игнорировать = терять лид.
-async function whisperTranscribeAudio(buffer, mime) {
-  const AIKEY = process.env.OPENAI_API_KEY || process.env.AITUNNEL_API_KEY || '';
-  if (!AIKEY) throw new Error('no LLM key for STT');
-  const model = process.env.STT_MODEL || 'whisper-large-v3-turbo';
+async function _whisperCall(buffer, mime, model, AIKEY) {
   const boundary = '----ZaryaBound' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   const ext = (mime || '').split('/')[1] || 'mp3';
   const parts = [];
@@ -430,12 +427,31 @@ async function whisperTranscribeAudio(buffer, mime) {
     headers: { 'Authorization': 'Bearer ' + AIKEY, 'Content-Type': 'multipart/form-data; boundary=' + boundary },
     body,
   });
+  const text = await r.text().catch(() => '');
   if (!r.ok) {
-    const t = await r.text().catch(() => '');
-    throw new Error('whisper HTTP ' + r.status + ' ' + t.slice(0, 200));
+    const err = new Error('whisper HTTP ' + r.status + ' ' + text.slice(0, 200));
+    err.status = r.status;
+    throw err;
   }
-  const d = await r.json().catch(() => ({}));
-  return String(d.text || '').trim();
+  try { return String(JSON.parse(text).text || '').trim(); }
+  catch { throw new Error('whisper bad JSON: ' + text.slice(0, 200)); }
+}
+
+async function whisperTranscribeAudio(buffer, mime) {
+  const AIKEY = process.env.BOT_LLM_KEY || process.env.OPENAI_API_KEY || process.env.AITUNNEL_API_KEY || '';
+  if (!AIKEY) throw new Error('no LLM key for STT');
+  const primary = process.env.STT_MODEL || 'whisper-large-v3-turbo';
+  const fallback = process.env.STT_MODEL_FALLBACK || 'whisper-1';
+  try {
+    return await _whisperCall(buffer, mime, primary, AIKEY);
+  } catch (e) {
+    // 429 / 5xx у v3-turbo → падаем на стабильный whisper-1
+    if ((e.status === 429 || (e.status >= 500 && e.status < 600)) && primary !== fallback) {
+      console.warn('[whisper] ' + primary + ' returned ' + e.status + ', fallback to ' + fallback);
+      return await _whisperCall(buffer, mime, fallback, AIKEY);
+    }
+    throw e;
+  }
 }
 
 async function avitoTranscribeVoice(tenant, voiceId) {
@@ -462,7 +478,7 @@ async function avitoTranscribeVoice(tenant, voiceId) {
 // Реальные клиенты БФЛ шлют фото документов (решения суда, справки, паспорта) —
 // без описания бот не может ссылаться на факт, что клиент прислал документ.
 async function visionDescribeImage(buffer, mime) {
-  const AIKEY = process.env.OPENAI_API_KEY || process.env.AITUNNEL_API_KEY || '';
+  const AIKEY = process.env.BOT_LLM_KEY || process.env.OPENAI_API_KEY || process.env.AITUNNEL_API_KEY || '';
   if (!AIKEY) throw new Error('no LLM key for vision');
   const model = process.env.VISION_MODEL || 'gemini-2.5-flash';
   const dataUrl = `data:${mime || 'image/jpeg'};base64,${buffer.toString('base64')}`;
