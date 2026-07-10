@@ -264,7 +264,7 @@ function actorEmail(req) {
 }
 
 const app = express();
-app.use(express.json({ limit: '512kb' }));
+app.use(express.json({ limit: '8mb' }));  // 8 МБ — под голосовые/картинки в base64 из тест-чата
 app.use((req, res, next) => {
   res.set('Access-Control-Allow-Origin', '*');
   res.set('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
@@ -961,7 +961,30 @@ app.post('/api/sales-chat', resolveTenant, async (req, res) => {
     const tid = req.tenant.tenant_id;
     let sid = String((req.body && req.body.session_id) || '').trim();
     if (!sid) sid = 's' + Math.random().toString(36).slice(2) + Date.now().toString(36);
-    const msg = String((req.body && req.body.message) || '').trim();
+    let msg = String((req.body && req.body.message) || '').trim();
+    // Медиа-сообщения (голос/картинка) — распознаём и подставляем как text.
+    // Используется тестовым чатом в ЛК Дирижёра + виджетом (когда добавим).
+    if (!msg && req.body && req.body.media && req.body.media.data_b64) {
+      const media = req.body.media;
+      const buf = Buffer.from(String(media.data_b64), 'base64');
+      const mime = String(media.mime || '');
+      const kind = String(media.type || '').toLowerCase();
+      try {
+        if (kind === 'audio' || mime.startsWith('audio/')) {
+          msg = await whisperTranscribeAudio(buf, mime || 'audio/webm');
+          console.log('[media-voice] tenant=' + req.tenant.slug + ' sid=' + sid + ' transcribed=' + msg.slice(0, 120));
+        } else if (kind === 'image' || mime.startsWith('image/')) {
+          const desc = await visionDescribeImage(buf, mime || 'image/jpeg');
+          msg = desc ? '[Клиент прислал изображение — ' + desc + ']' : '';
+          console.log('[media-image] tenant=' + req.tenant.slug + ' sid=' + sid + ' described=' + desc.slice(0, 150));
+        } else {
+          console.warn('[media] unknown kind=' + kind + ' mime=' + mime);
+        }
+      } catch (e) {
+        console.warn('[media] recognize fail:', e.message);
+        return res.status(422).json({ error: 'media-recognize-fail', detail: e.message.slice(0, 200) });
+      }
+    }
     // Phone-ack guard (клиентские тенанты): если бот подтверждает получение номера, а
     // в клиентском сообщении нет 10+ цифр — заменить на просьбу продиктовать цифрами.
     // Плюс: срезать ИИ-акknowledgment префикс «Поняла./Хорошо./Спасибо, записала» — правило 17.

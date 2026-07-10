@@ -2003,7 +2003,17 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
           </div>
 
           <!-- Input -->
-          <div class="orchestra-chat-input flex items-center gap-3 p-4">
+          <div class="orchestra-chat-input flex items-center gap-2 p-4">
+            <input type="file" accept="image/*,audio/*" @change="handleTestFile" x-ref="testFileInput" hidden>
+            <button @click="$refs.testFileInput.click()"
+              :disabled="chatSending"
+              title="Прикрепить фото или аудио"
+              style="background:transparent; color:#f5f5f0; border:1px solid rgba(245,245,240,0.15); border-radius:10px; width:38px; height:38px; font-size:16px; cursor:pointer; display:flex; align-items:center; justify-content:center; flex-shrink:0;">📎</button>
+            <button @click="toggleVoiceRecord"
+              :disabled="chatSending"
+              :title="isRecording?'Остановить запись':'Записать голосовое'"
+              :style="'background:'+(isRecording?'#D03A2E':'transparent')+'; color:#f5f5f0; border:1px solid rgba(245,245,240,0.15); border-radius:10px; width:38px; height:38px; font-size:16px; cursor:pointer; display:flex; align-items:center; justify-content:center; flex-shrink:0;'"
+              x-text="isRecording?'⏹':'🎤'"></button>
             <input type="text" x-model="chatInput"
               @keydown.enter="sendTestMessage"
               :disabled="chatSending"
@@ -4094,6 +4104,7 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
 function adminApp() {
   return {
     authenticated: false, password: '', loginName: '', loginError: '', token: '', scope: 'full', isEmbed: false,
+    isRecording: false, mediaRecorder: null, recordedChunks: [],
     b4Dialogs: [], b4Sel: null, b4Msgs: [], b4Leads: [], b4Tab: 'dialogs',
     aishaKb: { kb:'', scripts:'' },
     aishaStats: { leads_total: 0, leads_today: 0, sessions_total: 0, messages_24h: 0 },
@@ -4861,6 +4872,118 @@ function adminApp() {
     scrollChat() {
       const el = document.getElementById('chat-messages');
       if (el) el.scrollTop = el.scrollHeight;
+    },
+
+    // Приём файла (image/audio) через input[type=file] в тест-чате.
+    async handleTestFile(ev) {
+      const file = ev.target.files && ev.target.files[0];
+      if (!file) return;
+      ev.target.value = '';   // сброс, чтобы можно было выбрать тот же файл повторно
+      if (file.size > 7 * 1024 * 1024) {
+        this.showToast('Файл слишком большой (максимум 7 МБ)', 'error');
+        return;
+      }
+      const kind = file.type.startsWith('image/') ? 'image'
+                 : file.type.startsWith('audio/') ? 'audio' : '';
+      if (!kind) { this.showToast('Поддерживаются только image/* и audio/*', 'error'); return; }
+      const b64 = await this._fileToBase64(file);
+      await this.sendTestMediaMessage({ type: kind, mime: file.type, data_b64: b64, label: file.name });
+    },
+
+    // Запись голосового через MediaRecorder API.
+    async toggleVoiceRecord() {
+      if (this.isRecording) {
+        // остановить и отправить
+        this.mediaRecorder?.stop();
+        return;
+      }
+      if (!navigator.mediaDevices?.getUserMedia) {
+        this.showToast('Браузер не поддерживает запись звука', 'error');
+        return;
+      }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        // предпочитаем webm/opus (широко поддерживается + Whisper понимает)
+        const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+          ? 'audio/webm;codecs=opus'
+          : (MediaRecorder.isTypeSupported('audio/mp4') ? 'audio/mp4' : '');
+        const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+        this.recordedChunks = [];
+        rec.ondataavailable = (e) => { if (e.data && e.data.size > 0) this.recordedChunks.push(e.data); };
+        rec.onstop = async () => {
+          stream.getTracks().forEach(t => t.stop());
+          this.isRecording = false;
+          const blob = new Blob(this.recordedChunks, { type: rec.mimeType || 'audio/webm' });
+          if (blob.size < 500) { this.showToast('Запись пустая', 'error'); return; }
+          const b64 = await this._blobToBase64(blob);
+          await this.sendTestMediaMessage({ type: 'audio', mime: blob.type, data_b64: b64, label: 'voice' });
+        };
+        this.mediaRecorder = rec;
+        this.isRecording = true;
+        rec.start();
+      } catch (e) {
+        this.showToast('Нет доступа к микрофону: ' + e.message, 'error');
+        this.isRecording = false;
+      }
+    },
+
+    _fileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result).split(',')[1] || '');
+        r.onerror = reject;
+        r.readAsDataURL(file);
+      });
+    },
+    _blobToBase64(blob) { return this._fileToBase64(blob); },
+
+    async sendTestMediaMessage(media) {
+      if (this.chatSending) return;
+      this.chatSending = true;
+      this.traceLog = [];
+      this.resetFlow();
+      // Локально показываем placeholder-сообщение от юзера
+      const label = media.type === 'image' ? '📷 Отправлено изображение' : '🎙 Отправлено голосовое';
+      this.testMessages.push({ role: 'user', content: label + (media.label ? ' · ' + media.label : '') });
+      this.$nextTick(() => this.scrollChat());
+      try {
+        const _botHost = (window.location.hostname || '').replace(/^admin\./, 'bot.');
+        const _url = this.scope === 'bot404'
+          ? (_botHost.startsWith('bot.') ? 'https://' + _botHost + '/api/sales-chat'
+                                         : this.botBase() + '/api/sales-chat')
+          : '/chat';
+        const r = await fetch(_url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Tenant-Slug': this.tenantSlug || '' },
+          body: JSON.stringify({
+            session_id: this.testSessionId,
+            media: { type: media.type, mime: media.mime, data_b64: media.data_b64 },
+          }),
+        });
+        const data = await r.json();
+        if (r.ok) {
+          this.testSessionId = data.session_id;
+          // Показываем распознанный текст как подсказку под user-сообщением
+          const recognized = data._recognized_text || '';
+          if (recognized) {
+            const last = this.testMessages[this.testMessages.length - 1];
+            if (last) last.content = last.content + '\n\n' + recognized;
+          }
+          this.testMessages.push({
+            role: 'assistant',
+            content: data.reply || data.response || '(пусто)',
+            intent: data.intent,
+            usedLlm: data.used_llm_for_routing,
+          });
+          this.$nextTick(() => this.scrollChat());
+        } else {
+          this.testMessages.push({ role: 'assistant', content: '❌ Ошибка: ' + (data.detail || data.error || 'неизвестная') });
+        }
+      } catch (e) {
+        this.testMessages.push({ role: 'assistant', content: '❌ Нет соединения: ' + e.message });
+      } finally {
+        this.chatSending = false;
+      }
     },
 
     // ── SVG connections ───────────────────────────────────────────────────
