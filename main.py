@@ -1178,6 +1178,38 @@ async def proactive_confirm_code(req: TgConfirmRequest, x_admin_token: str = Hea
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.delete("/admin/api/proactive/accounts/{account_id}", dependencies=[Depends(_check_bot404_admin)])
+async def proactive_delete_account(account_id: int, x_admin_token: str = Header(default="")):
+    """Удаляет TG-аккаунт из проактивности: останавливает MTProto-клиент,
+    удаляет запись из tg_accounts. Кампании с этим account_id остаются, но
+    рассылка/приём через этот аккаунт больше невозможны (FK в campaigns).
+    """
+    tid = await _tenant_id_from_token(x_admin_token)
+    if tid is None:
+        raise HTTPException(status_code=404, detail="tenant not found")
+    pool = await _b404_pool()
+    row = await pool.fetchrow(
+        "SELECT id, phone, tenant_id FROM tg_accounts WHERE id=$1", account_id,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="account not found")
+    if int(row["tenant_id"]) != int(tid):
+        raise HTTPException(status_code=403, detail="not your account")
+    phone = row["phone"]
+    # Останавливаем MTProto клиент (best-effort)
+    try:
+        await tg_client.stop_client(phone)
+    except Exception as e:
+        print(f"[proactive.delete] stop_client fail: {e}")
+    # Есть ли кампании с этим аккаунтом? Если да — не даём удалить, надо сначала снести кампании
+    used = await pool.fetchval("SELECT count(*) FROM campaigns WHERE account_id=$1", account_id)
+    if used and used > 0:
+        raise HTTPException(status_code=409, detail=f"У аккаунта {used} привязанных кампаний — сначала удалите их")
+    await pool.execute("DELETE FROM tg_accounts WHERE id=$1", account_id)
+    await _audit("proactive.account.delete", {"account_id": account_id, "phone": phone}, tid=tid)
+    return {"ok": True}
+
+
 @app.get("/admin/api/proactive/campaigns", dependencies=[Depends(_check_bot404)])
 async def proactive_list_campaigns(x_admin_token: str = Header(default="")):
     tid = await _tenant_id_from_token(x_admin_token)

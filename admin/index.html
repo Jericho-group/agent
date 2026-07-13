@@ -3364,12 +3364,19 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
                       </div>
                     </td>
                     <td class="px-4 py-3">
-                      <button x-show="!acc.online"
-                        @click="proRelogin(acc.phone)"
-                        class="bg-amber-500 hover:bg-amber-600 text-white px-3 py-1 rounded-lg text-xs transition flex items-center gap-1">
-                        🔑 Переавторизовать
-                      </button>
-                      <span x-show="acc.online" class="text-xs text-slate-400">—</span>
+                      <div class="flex items-center gap-2">
+                        <button x-show="!acc.online"
+                          @click="proRelogin(acc.phone)"
+                          class="bg-amber-500 hover:bg-amber-600 text-white px-3 py-1 rounded-lg text-xs transition">
+                          🔑 Переавторизовать
+                        </button>
+                        <button @click="proDeleteAccount(acc)"
+                          :disabled="proAccountBusy===acc.id"
+                          class="bg-red-500 hover:bg-red-600 disabled:opacity-50 text-white px-3 py-1 rounded-lg text-xs transition"
+                          title="Отключить и удалить аккаунт из проактивности">
+                          🗑 Удалить
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 </template>
@@ -4696,7 +4703,7 @@ function adminApp() {
       { id:'campaigns', label:'Кампании',     icon:'📣' },
       { id:'dialogs',   label:'Диалоги',      icon:'💬' },
     ],
-    proAccounts: [], proCampaigns: [], proConversations: [], proContacts: [],
+    proAccounts: [], proAccountBusy: null, proCampaigns: [], proConversations: [], proContacts: [],
     proSelectedCampaign: null, proContactsOpen: false, proContactsText: '',
     proContactsTab: 'manual',
     proFilePreview: [], proFileDupes: 0,
@@ -5674,6 +5681,21 @@ function adminApp() {
       this.proShowAddAccount = true;
       // Скролл вверх чтобы форма была видна
       this.$nextTick(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
+    },
+    async proDeleteAccount(acc) {
+      if (!confirm(`Удалить аккаунт ${acc.phone} из проактивности?\n\nMTProto-клиент будет остановлен, запись удалена.\nЕсли есть привязанные кампании — сначала удалите их.`)) return;
+      this.proAccountBusy = acc.id;
+      try {
+        const r = await fetch(`/admin/api/proactive/accounts/${acc.id}`, { method:'DELETE', headers: this.h() });
+        if (!r.ok) {
+          const err = await r.json().catch(()=>({}));
+          throw new Error(err.detail || ('HTTP ' + r.status));
+        }
+        this.showToast?.('Аккаунт удалён', 'success');
+        await this.proLoadAccounts();
+      } catch (e) {
+        this.showToast?.('Не удалось удалить: ' + (e.message || e), 'error');
+      } finally { this.proAccountBusy = null; }
     },
     async proRequestCode() {
       this.proAddLoading = true; this.proAddError = ''; this.proAddSuccess = '';
