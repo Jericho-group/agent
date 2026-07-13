@@ -3674,14 +3674,15 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
               <!-- Форма отправки от оператора: доступна всегда, но при активном takeover — подсвечена -->
               <div class="p-3 border-t border-slate-100 bg-white">
                 <div class="flex gap-2 items-end">
-                  <textarea x-model="proReplyText" @keydown.enter.prevent="if(!$event.shiftKey) proSendReply()"
-                            :placeholder="proTakeoverActive?'Ваше сообщение клиенту (Enter — отправить, Shift+Enter — перенос)':'Возьмите управление или напишите — Enter отправит'"
+                  <textarea x-model="proReplyText" @keydown.enter.prevent="if(!$event.shiftKey && proTakeoverActive) proSendReply()"
+                            :disabled="!proTakeoverActive"
+                            :placeholder="proTakeoverActive?'Ваше сообщение клиенту (Enter — отправить, Shift+Enter — перенос)':'Сначала возьмите управление — только тогда можно писать'"
                             rows="2"
-                            class="flex-1 px-3 py-2 rounded-[10px] text-[14px] resize-none"
+                            class="flex-1 px-3 py-2 rounded-[10px] text-[14px] resize-none disabled:opacity-50 disabled:cursor-not-allowed"
                             style="border:0.5px solid #E2E2E2;"></textarea>
                   <button @click="proSendReply()"
-                          :disabled="proReplyBusy || !proReplyText.trim()"
-                          class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-[10px] text-sm transition disabled:opacity-50">
+                          :disabled="!proTakeoverActive || proReplyBusy || !proReplyText.trim()"
+                          class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-[10px] text-sm transition disabled:opacity-50 disabled:cursor-not-allowed">
                     <span x-text="proReplyBusy?'…':'Отправить'"></span>
                   </button>
                 </div>
@@ -5862,9 +5863,12 @@ function adminApp() {
           throw new Error(err.detail || ('HTTP ' + r.status));
         }
         this.proReplyText = '';
-        // Оптимистично добавляем в UI, потом подгрузим точный список
-        this.proDialogMessages.push({ direction: 'out', content: text, created_at: new Date().toISOString() });
-        setTimeout(() => this.proOpenDialog(this.proSelectedConv), 500);
+        // Сразу подгружаем актуальный список из БД (запись синхронная — уже там).
+        // proOpenDialog сбрасывает selection — используем прямой fetch, чтобы сохранить selection.
+        try {
+          const rf = await fetch(`/admin/api/proactive/conversations/${this.proSelectedConv.id}`, { headers: this.h() });
+          if (rf.ok) this.proDialogMessages = await rf.json();
+        } catch (_) {}
       } catch (e) {
         this.showToast?.('Не отправилось: ' + (e.message || e), 'error');
       } finally { this.proReplyBusy = false; }
