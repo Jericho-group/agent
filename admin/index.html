@@ -1511,8 +1511,13 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
        :class="(sidebarOpen?'is-open ':'') + (sidebarCollapsed?'is-collapsed w-[64px]':'w-60')">
     <div class="px-5 py-5 border-b" style="border-color:#ECECEC;">
       <div class="flex items-center gap-3">
-        <div class="w-9 h-9 rounded-[10px] flex items-center justify-center font-medium text-[12px]"
-             style="background:#0B8A5B; color:#fff; letter-spacing:0.02em;">404</div>
+        <div class="w-9 h-9 rounded-[10px] flex items-center justify-center font-medium text-[12px] relative"
+             style="background:#0B8A5B; color:#fff; letter-spacing:0.02em;">404
+          <!-- бейдж «ТЕСТ» — только на dev/test-стендах (sslip.io / голый IP) -->
+          <span x-show="isTestServer"
+                title="Тестовый стенд — не боевые данные"
+                style="position:absolute; top:-6px; right:-14px; background:#D03A2E; color:#fff; font-size:9px; font-weight:700; padding:2px 5px; border-radius:6px; letter-spacing:0.05em; box-shadow:0 1px 3px rgba(208,58,46,0.4); z-index:5;">ТЕСТ</span>
+        </div>
         <div class="min-w-0">
           <div class="font-semibold text-[15px] truncate" style="color:#1A1A1A;" x-text="(brandName || 'Дирижёр') + (brandBotName ? ' · ' + brandBotName : '')"></div>
           <div class="flex items-center gap-1.5 mt-0.5">
@@ -4104,6 +4109,13 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
 function adminApp() {
   return {
     authenticated: false, password: '', loginName: '', loginError: '', token: '', scope: 'full', isEmbed: false,
+    // true если открыт с dev/test-стенда (sslip.io или голый IP), false для прод admin.dirizher404.ru
+    get isTestServer() {
+      try {
+        const h = (typeof location !== 'undefined' ? location.hostname : '') || '';
+        return h.includes('sslip.io') || /^\d+\.\d+\.\d+\.\d+$/.test(h) || h.includes('217-149-25-34') || h.includes('217.149.25.34');
+      } catch { return false; }
+    },
     isRecording: false, mediaRecorder: null, recordedChunks: [],
     b4Dialogs: [], b4Sel: null, b4Msgs: [], b4Leads: [], b4Tab: 'dialogs',
     aishaKb: { kb:'', scripts:'' },
