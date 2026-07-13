@@ -46,10 +46,12 @@ async def lifespan(app: FastAPI):
     if doc_count == 0:
         print("[startup] WARNING: Knowledge base is empty. Run: python ingest_data.py")
 
-    # Загружаем Telegram-аккаунты и подписываемся на входящие
+    # Telegram-аккаунты грузим В ФОНЕ — MTProto-коннект может ретраить минуты
+    # (например при блокировке IPv4 у РКН), а Uvicorn не должен блокироваться.
     tg_client.set_incoming_handler(campaign_manager.handle_incoming)
-    await tg_client.load_active_accounts()
-    print("[startup] Proactive TG module ready")
+    import asyncio as _asyncio
+    _asyncio.create_task(tg_client.load_active_accounts())
+    print("[startup] Proactive TG module scheduled (background)")
     yield
 
 
@@ -1251,6 +1253,109 @@ async def proactive_conversations(x_admin_token: str = Header(default=""), campa
 async def proactive_conversation_messages(contact_id: int, x_admin_token: str = Header(default="")):
     tid = await _tenant_id_from_token(x_admin_token)
     return await campaign_manager.get_conversation_messages(contact_id, tid)
+
+
+class _ProTakeoverBody(_BaseModel):
+    enabled: bool
+
+
+@app.post("/admin/api/proactive/conversations/{contact_id}/takeover", dependencies=[Depends(_check_bot404)])
+async def proactive_takeover(contact_id: int, body: _ProTakeoverBody, x_admin_token: str = Header(default="")):
+    """Оператор берёт/отдаёт управление проактивным диалогом.
+
+    session_id формат `proactive-tg:{contact_id}` — тот же, что использует
+    campaign_manager.handle_incoming. При enabled=true бот молчит на входящие,
+    ответы уходят через /admin/api/proactive/conversations/{contact_id}/reply.
+    """
+    tid = await _tenant_id_from_token(x_admin_token)
+    if tid is None:
+        raise HTTPException(status_code=404, detail="tenant not found")
+    pool = await _b404_pool()
+    # Проверяем что contact_id принадлежит этому тенанту (через campaign),
+    # заодно достаём фактический session_id — тот же, который использует
+    # campaign_manager.handle_incoming (contact.session_id — UUID первой рассылки
+    # или proactive-tg:{id} fallback). Иначе takeover пишется в session_meta по
+    # одному ключу, а /api/sales-chat читает по другому — бот не молчит.
+    row = await pool.fetchrow(
+        "SELECT c.tenant_id, cc.session_id FROM campaign_contacts cc JOIN campaigns c ON c.id = cc.campaign_id WHERE cc.id=$1",
+        contact_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="contact not found")
+    if int(row["tenant_id"]) != int(tid):
+        raise HTTPException(status_code=403, detail="not your contact")
+    sid = row["session_id"] or f"proactive-tg:{contact_id}"
+    await pool.execute(
+        """INSERT INTO session_meta (session_id, tenant_id, human_takeover)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (session_id) DO UPDATE SET human_takeover = EXCLUDED.human_takeover""",
+        sid, tid, body.enabled,
+    )
+    await _audit("proactive.takeover", {"contact_id": contact_id, "enabled": body.enabled}, tid=tid)
+    return {"ok": True, "session_id": sid, "human_takeover": body.enabled}
+
+
+class _ProReplyBody(_BaseModel):
+    text: str
+
+
+@app.post("/admin/api/proactive/conversations/{contact_id}/reply", dependencies=[Depends(_check_bot404)])
+async def proactive_manual_reply(contact_id: int, body: _ProReplyBody, x_admin_token: str = Header(default="")):
+    """Оператор отправляет сообщение из ЛК в user-mode Telegram-диалог.
+
+    Использует tg_client.send_message с phone аккаунта кампании и tg_user_id
+    контакта. Пишет в outreach_messages direction='out' — сообщение появится
+    во вкладке «Диалоги» (proactive) как ответ оператора.
+    """
+    text = (body.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text required")
+    if len(text) > 4000:
+        text = text[:4000]
+
+    tid = await _tenant_id_from_token(x_admin_token)
+    if tid is None:
+        raise HTTPException(status_code=404, detail="tenant not found")
+
+    pool = await _b404_pool()
+    contact = await pool.fetchrow(
+        """SELECT cc.tg_user_id, cc.username, cc.session_id, c.tenant_id, a.phone
+             FROM campaign_contacts cc
+             JOIN campaigns    c ON c.id = cc.campaign_id
+             JOIN tg_accounts  a ON a.id = c.account_id
+            WHERE cc.id = $1""",
+        contact_id,
+    )
+    if not contact:
+        raise HTTPException(status_code=404, detail="contact not found")
+    if int(contact["tenant_id"]) != int(tid):
+        raise HTTPException(status_code=403, detail="not your contact")
+    if not contact["tg_user_id"]:
+        raise HTTPException(status_code=400, detail="no tg_user_id on contact — reply не поддерживается пока клиент не написал первым")
+
+    # Отправляем через user-mode Telegram
+    from proactive import tg_client as _tgc
+    try:
+        await _tgc.send_message(contact["phone"], int(contact["tg_user_id"]), text)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"tg send fail: {e}")
+
+    # Логируем в БД:
+    #   - outreach_messages — для UI-диалога «Проактивность → Диалоги»
+    #   - bot_404_log — КРИТИЧНО: контекст, который читает бот в /api/sales-chat при
+    #     генерации ответа. Без этой записи вернувший управление боту клиент получит
+    #     ответ так, как будто оператор не писал ничего — контекст потеряется.
+    sid = contact["session_id"] or f"proactive-tg:{contact_id}"
+    await pool.execute(
+        "INSERT INTO outreach_messages (contact_id, direction, content) VALUES ($1,'out',$2)",
+        contact_id, text,
+    )
+    await pool.execute(
+        "INSERT INTO bot_404_log(session_id,direction,text,tenant_id) VALUES($1,'out',$2,$3)",
+        sid, text, tid,
+    )
+    await _audit("proactive.reply", {"contact_id": contact_id, "len": len(text)}, tid=tid)
+    return {"ok": True}
 
 
 # ── Универсальный поиск для Cmd+K палитры ─────────────────────────────────────

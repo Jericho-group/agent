@@ -3642,9 +3642,20 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
               Выберите диалог
             </div>
             <div x-show="proSelectedConv" class="flex flex-col h-full">
-              <div class="p-4 border-b border-slate-100 bg-slate-50">
-                <div class="font-semibold text-slate-800" x-text="proSelectedConv?.username||proSelectedConv?.name||'—'"></div>
-                <div class="text-xs text-slate-400" x-text="proSelectedConv?.campaign_name"></div>
+              <div class="p-4 border-b border-slate-100 bg-slate-50 flex items-center justify-between gap-3">
+                <div class="min-w-0">
+                  <div class="font-semibold text-slate-800 truncate" x-text="proSelectedConv?.username||proSelectedConv?.name||'—'"></div>
+                  <div class="text-xs text-slate-400 truncate" x-text="proSelectedConv?.campaign_name"></div>
+                </div>
+                <div class="flex items-center gap-2 shrink-0">
+                  <span x-show="proTakeoverActive" class="px-1.5 py-0.5 rounded-full text-[10px] font-medium" style="background:#FFF4E0; color:#7A5A1A;">👤 ручное</span>
+                  <button @click="proToggleTakeover()" :disabled="proTakeoverBusy"
+                          :class="proTakeoverActive?'bg-emerald-600 hover:bg-emerald-700':'bg-amber-600 hover:bg-amber-700'"
+                          class="text-white text-xs px-3 py-1.5 rounded-lg transition disabled:opacity-50"
+                          :title="proTakeoverActive?'Вернуть управление боту':'Взять диалог себе'">
+                    <span x-text="proTakeoverActive?'🤖 Вернуть боту':'👤 Взять управление'"></span>
+                  </button>
+                </div>
               </div>
               <div class="flex-1 overflow-auto p-4 space-y-3">
                 <template x-for="(msg,i) in proDialogMessages" :key="i">
@@ -3653,12 +3664,30 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
                         ?'bg-indigo-600 text-white rounded-2xl rounded-br-sm'
                         :'bg-slate-100 text-slate-800 rounded-2xl rounded-bl-sm'"
                       class="max-w-xs px-4 py-2 text-sm">
-                      <div x-text="msg.content"></div>
+                      <div x-text="msg.content" style="white-space:pre-wrap;"></div>
                       <div :class="msg.direction==='out'?'text-indigo-200':'text-slate-400'" class="text-xs mt-1"
                         x-text="new Date(msg.created_at).toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'})"></div>
                     </div>
                   </div>
                 </template>
+              </div>
+              <!-- Форма отправки от оператора: доступна всегда, но при активном takeover — подсвечена -->
+              <div class="p-3 border-t border-slate-100 bg-white">
+                <div class="flex gap-2 items-end">
+                  <textarea x-model="proReplyText" @keydown.enter.prevent="if(!$event.shiftKey) proSendReply()"
+                            :placeholder="proTakeoverActive?'Ваше сообщение клиенту (Enter — отправить, Shift+Enter — перенос)':'Возьмите управление или напишите — Enter отправит'"
+                            rows="2"
+                            class="flex-1 px-3 py-2 rounded-[10px] text-[14px] resize-none"
+                            style="border:0.5px solid #E2E2E2;"></textarea>
+                  <button @click="proSendReply()"
+                          :disabled="proReplyBusy || !proReplyText.trim()"
+                          class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-[10px] text-sm transition disabled:opacity-50">
+                    <span x-text="proReplyBusy?'…':'Отправить'"></span>
+                  </button>
+                </div>
+                <div class="text-[11px] text-slate-400 mt-1.5" x-show="!proTakeoverActive">
+                  Совет: возьмите управление кнопкой сверху, чтобы бот перестал отвечать автоматически.
+                </div>
               </div>
             </div>
           </div>
@@ -4673,6 +4702,7 @@ function adminApp() {
     proSegFilter: 'active_7d', proSegProduct: 'echolytics', proSegIndustry: '',
     proSegCount: 0, proSegSample: [], proSegLoading: false,
     proSelectedConv: null, proDialogMessages: [], proDialogFilter: '',
+    proTakeoverActive: false, proTakeoverBusy: false, proReplyText: '', proReplyBusy: false,
     proShowAddAccount: false, proShowNewCampaign: false,
     proPhone: '', proCode: '', proCodeSent: false, proPhoneCodeHash: '',
     proAddLoading: false, proAddError: '', proAddSuccess: '',
@@ -5796,8 +5826,48 @@ function adminApp() {
     },
     async proOpenDialog(conv) {
       this.proSelectedConv = conv;
+      this.proReplyText = '';
+      this.proTakeoverActive = !!conv.human_takeover;
       const r = await fetch(`/admin/api/proactive/conversations/${conv.id}`, { headers: this.h() });
       this.proDialogMessages = await r.json();
+    },
+    async proToggleTakeover() {
+      if (!this.proSelectedConv || this.proTakeoverBusy) return;
+      const target = !this.proTakeoverActive;
+      this.proTakeoverBusy = true;
+      try {
+        const r = await fetch(`/admin/api/proactive/conversations/${this.proSelectedConv.id}/takeover`, {
+          method: 'POST', headers: { ...this.h(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: target }),
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        this.proTakeoverActive = target;
+        if (this.proSelectedConv) this.proSelectedConv.human_takeover = target;
+        this.showToast?.(target ? 'Вы взяли управление' : 'Управление вернулось боту', 'success');
+      } catch (e) {
+        this.showToast?.('Не удалось переключить: ' + (e.message || e), 'error');
+      } finally { this.proTakeoverBusy = false; }
+    },
+    async proSendReply() {
+      const text = (this.proReplyText || '').trim();
+      if (!text || !this.proSelectedConv || this.proReplyBusy) return;
+      this.proReplyBusy = true;
+      try {
+        const r = await fetch(`/admin/api/proactive/conversations/${this.proSelectedConv.id}/reply`, {
+          method: 'POST', headers: { ...this.h(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        });
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({}));
+          throw new Error(err.detail || ('HTTP ' + r.status));
+        }
+        this.proReplyText = '';
+        // Оптимистично добавляем в UI, потом подгрузим точный список
+        this.proDialogMessages.push({ direction: 'out', content: text, created_at: new Date().toISOString() });
+        setTimeout(() => this.proOpenDialog(this.proSelectedConv), 500);
+      } catch (e) {
+        this.showToast?.('Не отправилось: ' + (e.message || e), 'error');
+      } finally { this.proReplyBusy = false; }
     },
 
     // ── Realtime polling ──────────────────────────────────────────────────
@@ -5813,6 +5883,17 @@ function adminApp() {
         // обновим текущий открытый раздел
         if (this.page === 'dashboard') this.refreshExtStats?.();
         if (this.page === 'conversations') this.loadSessions?.();
+        // Проактивность: реалтайм — обновляем список диалогов и открытый диалог
+        if (this.page === 'proactive' && this.proTab === 'dialogs') {
+          this.proLoadConversations?.();
+          if (this.proSelectedConv) {
+            // тихо обновляем сообщения открытого диалога — без сброса скролла и selection
+            fetch(`/admin/api/proactive/conversations/${this.proSelectedConv.id}`, { headers: this.h() })
+              .then(r => r.ok ? r.json() : null)
+              .then(d => { if (d && Array.isArray(d) && d.length !== this.proDialogMessages.length) this.proDialogMessages = d; })
+              .catch(() => {});
+          }
+        }
         // KB polling убран — данные меняются редко, поллинг создавал моргание списка
       }, 5000);
     },
