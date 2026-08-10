@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>404ai · Аиша — ЛК</title>
+  <title>Дирижёр — личный кабинет</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.ico">
   <link rel="apple-touch-icon" href="/favicon.ico">
   <link rel="mask-icon" href="/favicon.ico" color="#0176D3">
@@ -89,6 +89,20 @@
     .ring-electric:focus, .ring-electric:focus-visible { outline:none; box-shadow:0 0 0 3px rgba(1,118,211,.25); }
 
     /* ═══ BRUTAL theme — inspired by editorial monochrome sites ═══ */
+    /* v1.1 embed-режим — гейтинг UI по actor_type */
+    html.prm-embed .sidebar-brand           { display: none !important; }
+    html.prm-embed-contact .aisha-nav-btn[data-nav-id="kb"],
+    html.prm-embed-contact .aisha-nav-btn[data-nav-id="branding"],
+    html.prm-embed-contact .aisha-nav-btn[data-nav-id="widget"],
+    html.prm-embed-contact .aisha-nav-btn[data-nav-id="telegram"],
+    html.prm-embed-contact .aisha-nav-btn[data-nav-id="usage"],
+    html.prm-embed-contact .aisha-nav-btn[data-nav-id="audit"],
+    html.prm-embed-contact .aisha-nav-btn[data-nav-id="team"],
+    html.prm-embed-contact .aisha-nav-btn[data-nav-id="agents"],
+    html.prm-embed-contact .aisha-nav-btn[data-nav-id="skills"],
+    html.prm-embed-contact .aisha-nav-btn[data-nav-id="partners"],
+    html.prm-embed-contact .aisha-nav-btn[data-nav-id="proactive"] { display: none !important; }
+    html.prm-embed-contact [data-embed-hide-contact] { display: none !important; }
     body.theme-brutal                      { background:#0a0a0a !important; color:#f5f5f0 !important; }
     body.theme-brutal .grid-bg {
       background-image:
@@ -1475,17 +1489,17 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
        style="background:#fff; border:1px solid #ECECEC; box-shadow:0 10px 30px rgba(20,23,40,.08);">
     <div class="flex items-center gap-2.5 mb-5">
       <div class="w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold"
-           style="background:linear-gradient(135deg,#0B8A5B 0%,#13B074 100%); box-shadow:0 6px 18px -8px rgba(11,138,91,.55); font-size:14px;">404</div>
+           style="background:linear-gradient(135deg,#0B8A5B 0%,#13B074 100%); box-shadow:0 6px 18px -8px rgba(11,138,91,.55); font-size:14px;">Д</div>
       <div>
         <div style="font-size:11px; color:#8A8A90; text-transform:uppercase; letter-spacing:0.18em;">Личный кабинет</div>
-        <div style="font-size:17px; color:#1A1A1A; font-weight:600; line-height:1.2;" x-text="(brandName || '404ai') + ' · ' + (brandBotName || 'Аиша')"></div>
+        <div style="font-size:17px; color:#1A1A1A; font-weight:600; line-height:1.2;" x-text="(brandName || 'Дирижёр') + (brandBotName ? ' · ' + brandBotName : '')"></div>
       </div>
     </div>
     <form @submit.prevent="login" class="space-y-2.5">
       <input type="text" x-model="loginName"
         class="w-full focus:outline-none"
         style="background:#fff; border:1px solid #E2E2E2; color:#1A1A1A; padding:11px 13px; font-size:14px; border-radius:10px;"
-        placeholder="Логин (agent / 404ai)" autofocus>
+        placeholder="Логин" autofocus>
       <input type="password" x-model="password"
         class="w-full focus:outline-none"
         style="background:#fff; border:1px solid #E2E2E2; color:#1A1A1A; padding:11px 13px; font-size:14px; border-radius:10px;"
@@ -1496,7 +1510,7 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
       </button>
       <p x-show="loginError" class="text-sm text-center" style="color:#D03A2E; margin-top:8px;" x-text="loginError"></p>
     </form>
-    <div class="text-center mt-4" style="font-size:11px; color:#8A8A90;" x-text="'бот ' + (brandBotName || 'Аиша') + ' · ' + (brandRoleSubtitle || 'дирижёр лидов')"></div>
+    <div class="text-center mt-4" style="font-size:11px; color:#8A8A90;" x-text="'бот ' + (brandBotName || 'ассистент') + ' · ' + (brandRoleSubtitle || 'управление лидами')"></div>
   </div>
 </div>
 
@@ -1511,10 +1525,15 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
        :class="(sidebarOpen?'is-open ':'') + (sidebarCollapsed?'is-collapsed w-[64px]':'w-60')">
     <div class="px-5 py-5 border-b" style="border-color:#ECECEC;">
       <div class="flex items-center gap-3">
-        <div class="w-9 h-9 rounded-[10px] flex items-center justify-center font-medium text-[12px]"
-             style="background:#0B8A5B; color:#fff; letter-spacing:0.02em;">404</div>
+        <div class="w-9 h-9 rounded-[10px] flex items-center justify-center font-medium text-[12px] relative"
+             style="background:#0B8A5B; color:#fff; letter-spacing:0.02em;">404
+          <!-- бейдж «ТЕСТ» — только на dev/test-стендах (sslip.io / голый IP) -->
+          <span x-show="isTestServer"
+                title="Тестовый стенд — не боевые данные"
+                style="position:absolute; top:-6px; right:-14px; background:#D03A2E; color:#fff; font-size:9px; font-weight:700; padding:2px 5px; border-radius:6px; letter-spacing:0.05em; box-shadow:0 1px 3px rgba(208,58,46,0.4); z-index:5;">ТЕСТ</span>
+        </div>
         <div class="min-w-0">
-          <div class="font-semibold text-[15px] truncate" style="color:#1A1A1A;" x-text="(brandName || '404ai') + ' · ' + (brandBotName || 'Аиша')"></div>
+          <div class="font-semibold text-[15px] truncate" style="color:#1A1A1A;" x-text="(brandName || 'Дирижёр') + (brandBotName ? ' · ' + brandBotName : '')"></div>
           <div class="flex items-center gap-1.5 mt-0.5">
             <span class="w-1.5 h-1.5 rounded-full"
                   :style="(stats.status==='ok'||stats.status==='online')?'background:#0B8A5B; box-shadow:0 0 0 2px rgba(11,138,91,.15);':'background:#D03A2E;'"
@@ -1545,8 +1564,13 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
           <symbol id="ic-leads" viewBox="0 0 24 24"><path d="M20 7h-3V5a2 2 0 0 0-2-2H9a2 2 0 0 0-2 2v2H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V8a1 1 0 0 0-1-1zM9 5h6v2H9V5z"/></symbol>
         </defs>
       </svg>
-      <template x-for="item in navItems" :key="item.id">
-        <button @click="page=item.id; sidebarOpen=false"
+      <template x-for="item in (
+          !isEmbed ? navItems :
+          (embedActorType === 'contact'
+             ? navItems.filter(n => ['conversations','leads'].includes(n.id))
+             : navItems.filter(n => ['dashboard','conversations','leads','kb','widget','branding','telegram','schedule','proactive','skills','agents'].includes(n.id)))
+        )" :key="item.id">
+        <button @click="page=item.id; sidebarOpen=false; if (item.id==='schedule') loadAvitoSchedule?.()" :data-nav-id="item.id"
           :style="page===item.id?'background:#E3F5ED; color:#085041;':'color:#5A5A60;'"
           class="aisha-nav-btn w-full flex items-center gap-3 px-3 py-2.5 rounded-[10px] text-[13.5px] font-medium transition-all">
           <svg class="nav-icon"><use :href="'#ic-'+item.id"></use></svg>
@@ -1571,7 +1595,7 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
         </svg>
         <span class="sidebar-expanded-only" x-text="sidebarCollapsed?'Развернуть':'Свернуть'"></span>
       </button>
-      <div class="mt-2 text-[11px] sidebar-expanded-only" style="color:#A0A0A6;">404ai · v1.0</div>
+      <div x-show="!isEmbed" class="mt-2 text-[11px] sidebar-expanded-only" style="color:#A0A0A6;">Дирижёр</div>
     </div>
   </div>
 
@@ -1602,7 +1626,7 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
           <kbd class="text-[10px] px-1.5 py-0.5 rounded" style="background:#FFFFFF; border:0.5px solid #E2E2E2; color:#8A8A90; font-family:ui-monospace,monospace;">⌘K</kbd>
         </button>
       </div>
-      <div class="flex items-center gap-2">
+      <div x-show="!isEmbed" class="flex items-center gap-2">
       <button @click="logout()" class="flex items-center gap-2 text-[13px] transition px-3 py-2 rounded-[10px]" style="color:#5A5A60;" onmouseover="this.style.background='#F4F6F4'; this.style.color='#D03A2E'" onmouseout="this.style.background='transparent'; this.style.color='#5A5A60'">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
         <span class="md-hide" x-text="loginName ? ('Выйти · '+loginName) : 'Выйти'"></span>
@@ -1636,12 +1660,12 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
           </div>
         </div>
 
-        <!-- Аналитика — реальные данные Аиши -->
+        <!-- Аналитика — реальные данные тенанта -->
         <div class="grid grid-cols-4 gap-4">
           <div class="aisha-lead-card rounded-[14px] p-5 relative" style="background:#FFFFFF; border:0.5px solid #ECECEC;">
             <div class="flex items-center gap-2 mb-2">
               <span class="w-2 h-2 rounded-full" style="background:#0B8A5B; box-shadow:0 0 0 3px rgba(11,138,91,.14);"></span>
-              <span class="text-[12px]" style="color:#8A8A90;">Лиды Аиши, всего</span>
+              <span class="text-[12px]" style="color:#8A8A90;">Лиды, всего</span>
             </div>
             <div class="num text-[28px] font-semibold leading-none flex items-baseline gap-2" style="color:#1A1A1A;">
               <span x-text="aishaStats.leads_total ?? 0"></span>
@@ -1675,11 +1699,11 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
           </div>
         </div>
 
-        <!-- Последние лиды Аиши (контакты с почтами/телефонами) -->
+        <!-- Последние лиды (контакты с почтами/телефонами) -->
         <div class="bg-white rounded-2xl border border-slate-100 overflow-hidden" x-show="(aishaLeads||[]).length>0">
           <div class="flex items-center justify-between px-5 py-4 border-b border-slate-100">
             <div>
-              <div class="text-[15px] font-semibold" style="color:#1A1A1A;">Последние лиды Аиши</div>
+              <div class="text-[15px] font-semibold" style="color:#1A1A1A;">Последние лиды</div>
               <div class="text-[12px]" style="color:#8A8A90;">контакты, оставленные клиентами в диалоге</div>
             </div>
             <button @click="page='conversations'" class="text-[12px]" style="color:#0B8A5B;">Все диалоги →</button>
@@ -1753,7 +1777,7 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
               </div>
               <span class="orchestra-badge font-mono text-[10px] uppercase tracking-[0.18em] px-3 py-1.5 rounded-full inline-flex items-center gap-2">
                 <span class="orchestra-dot"></span>
-                <span x-text="'[ ' + ((brandBotName || 'ORCHESTRA').toUpperCase()) + ' · LIVE ]'"></span>
+                <span x-text="'[ ' + ((brandBotName || 'Дирижёр').toUpperCase()) + ' · LIVE ]'"></span>
               </span>
             </div>
 
@@ -1799,7 +1823,7 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
                   <circle cx="12" cy="12" r="4"/>
                   <circle cx="12" cy="12" r="1.2" fill="currentColor"/>
                 </svg>
-                <div class="o-title" x-text="scope==='bot404'?(brandBotName||'Аиша'):'Дирижёр'"></div>
+                <div class="o-title" x-text="scope==='bot404'?(brandBotName||'ассистент'):'Дирижёр'"></div>
                 <div class="o-sub" x-text="scope==='bot404'?(traceRouterLabel||'2 прохода'):(traceRouterLabel||'Дирижёр')"></div>
               </div>
 
@@ -2003,7 +2027,17 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
           </div>
 
           <!-- Input -->
-          <div class="orchestra-chat-input flex items-center gap-3 p-4">
+          <div class="orchestra-chat-input flex items-center gap-2 p-4">
+            <input type="file" accept="image/*,audio/*" @change="handleTestFile" x-ref="testFileInput" hidden>
+            <button @click="$refs.testFileInput.click()"
+              :disabled="chatSending"
+              title="Прикрепить фото или аудио"
+              style="background:transparent; color:#f5f5f0; border:1px solid rgba(245,245,240,0.15); border-radius:10px; width:38px; height:38px; font-size:16px; cursor:pointer; display:flex; align-items:center; justify-content:center; flex-shrink:0;">📎</button>
+            <button @click="toggleVoiceRecord"
+              :disabled="chatSending"
+              :title="isRecording?'Остановить запись':'Записать голосовое'"
+              :style="'background:'+(isRecording?'#D03A2E':'transparent')+'; color:#f5f5f0; border:1px solid rgba(245,245,240,0.15); border-radius:10px; width:38px; height:38px; font-size:16px; cursor:pointer; display:flex; align-items:center; justify-content:center; flex-shrink:0;'"
+              x-text="isRecording?'⏹':'🎤'"></button>
             <input type="text" x-model="chatInput"
               @keydown.enter="sendTestMessage"
               :disabled="chatSending"
@@ -2012,7 +2046,8 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
               placeholder="Напишите сообщение... (Enter для отправки)">
             <button @click="sendTestMessage"
               :disabled="chatSending||!chatInput.trim()"
-              class="bg-indigo-600 text-white rounded-xl px-5 py-2.5 text-sm font-semibold disabled:opacity-50 transition active:scale-95 flex items-center gap-2 flex-shrink-0">
+              style="background:#0B8A5B; color:#fff; border:0; padding:10px 20px; font-size:14px; font-weight:600; border-radius:12px; cursor:pointer; display:flex; align-items:center; gap:8px; flex-shrink:0;"
+              :style="(chatSending||!chatInput.trim()) ? 'background:#0B8A5B; color:#fff; border:0; padding:10px 20px; font-size:14px; font-weight:600; border-radius:12px; display:flex; align-items:center; gap:8px; flex-shrink:0; opacity:0.4; cursor:not-allowed;' : ''">
               <span x-text="chatSending?'…':'Отправить'"></span>
               <svg x-show="!chatSending" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/>
@@ -2105,7 +2140,7 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
              })()">
           <div class="orchestra-hero-orbiter"></div>
           <div class="relative">
-            <div class="font-mono text-[11px] uppercase tracking-[0.25em] text-orange-400/80">{ orchestra · v1.0 }</div>
+            <div class="font-mono text-[11px] uppercase tracking-[0.25em] text-orange-400/80">{ Дирижёр · v1.0 }</div>
             <h2 class="font-display text-5xl font-extrabold mt-3 leading-[0.95] tracking-tight orchestra-typewriter">
               <span x-html="shown.replace('{', '<span class=&quot;text-orange-400/40&quot;>{</span>').replace('}', '<span class=&quot;text-orange-400/40&quot;>}</span>')"></span><span class="orchestra-caret" x-show="shown.length < full.length"></span>
             </h2>
@@ -2188,7 +2223,7 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
           <div class="grid grid-cols-3 gap-3 text-xs">
             <div class="bg-white/5 rounded-lg p-3 border border-white/10">
               <div class="text-slate-400 uppercase tracking-wider text-[10px] mb-1">API + Дирижёр</div>
-              <div class="font-mono text-slate-200">FastAPI + Orchestra</div>
+              <div class="font-mono text-slate-200">FastAPI + Дирижёр</div>
               <div class="text-slate-500 mt-1">контейнер chatbot_app, uvicorn на :8000</div>
             </div>
             <div class="bg-white/5 rounded-lg p-3 border border-white/10">
@@ -2199,7 +2234,7 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
             <div class="bg-white/5 rounded-lg p-3 border border-white/10">
               <div class="text-slate-400 uppercase tracking-wider text-[10px] mb-1">HTTPS / reverse-proxy</div>
               <div class="font-mono text-slate-200">Caddy 2</div>
-              <div class="text-slate-500 mt-1">авто Let's Encrypt для 217-149-25-34.sslip.io</div>
+              <div class="text-slate-500 mt-1">авто Let's Encrypt</div>
             </div>
             <div class="bg-white/5 rounded-lg p-3 border border-white/10">
               <div class="text-slate-400 uppercase tracking-wider text-[10px] mb-1">LLM</div>
@@ -2274,7 +2309,7 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
       <!-- ══ AGENTS ══════════════════════════════════════════════════════════ -->
       <div x-show="page==='agents'" class="p-6 space-y-4">
         <div class="font-mono text-[11px] uppercase tracking-[0.22em] pl-1 mb-1" style="color:rgba(245,245,240,0.55)">
-          <span class="text-orange-400/80">// agents</span> · live · powered by orchestra
+          <span class="text-orange-400/80">// agents</span> · live · powered by Дирижёр
         </div>
         <template x-for="(agent, ai) in agentConfigs" :key="agent.name">
           <div class="orchestra-agent rounded-2xl p-6 transition-all">
@@ -2322,7 +2357,7 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
 
       <!-- ══ KNOWLEDGE BASE · 404ai (полная, 1:1 с движком) ══ -->
       <div x-show="page==='kb' && scope==='bot404' && tenantSlug==='aisha'" class="p-6 space-y-4">
-        <div class="font-mono text-[11px] uppercase tracking-[0.22em] pl-1" style="color:rgba(245,245,240,0.55)"><span class="text-orange-400/80">// knowledge</span> · полная база Аиши, 1:1 с движком (read-only)</div>
+        <div class="font-mono text-[11px] uppercase tracking-[0.22em] pl-1" style="color:rgba(245,245,240,0.55)"><span class="text-orange-400/80">// knowledge</span> · полная база знаний, 1:1 с движком (read-only)</div>
         <template x-for="(blk, bi) in kbBlocks" :key="bi">
           <div class="rounded-2xl p-5" style="background:rgba(255,255,255,.04);border:1px solid rgba(245,245,240,.1)">
             <div x-show="blk.title" class="font-display font-bold text-sm mb-2" style="color:#ff6b35" x-text="blk.title"></div>
@@ -2333,7 +2368,7 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
           <div class="font-display font-bold text-sm mb-2" style="color:#ff6b35">Отработка возражений (скрипты)</div>
           <div class="text-xs leading-relaxed" style="color:rgba(245,245,240,.72);white-space:pre-wrap" x-text="aishaKb.scripts"></div>
         </div>
-        <div class="text-[11px] font-mono pl-1" style="color:rgba(245,245,240,0.4)">// тянется напрямую из движка Аиши (sales-bot.js) — всегда актуально</div>
+        <div class="text-[11px] font-mono pl-1" style="color:rgba(245,245,240,0.4)">// тянется напрямую из движка бота (sales-bot.js) — всегда актуально</div>
       </div>
       <!-- ══ KNOWLEDGE BASE ══════════════════════════════════════════════════ -->
       <div x-show="page==='kb' && (scope!=='bot404' || tenantSlug!=='aisha')" x-init="if(authenticated && page==='kb') loadKbDocs()" class="p-6 space-y-5">
@@ -2708,7 +2743,7 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
                 <!-- Иначе подсказка что памяти пока нет -->
                 <div x-show="sessionFacts !== null && factsAreEmpty(sessionFacts)" x-cloak
                      class="px-4 py-2 border-b border-slate-100 text-[11px] text-slate-400 italic" style="background:#FAFBFC;">
-                  🧠 Аиша ещё не накопила фактов в этой сессии
+                  🧠 Бот ещё не накопил фактов в этой сессии
                 </div>
                 <div class="flex-1 overflow-auto p-4 space-y-3 bg-slate-50">
                   <template x-for="msg in sessionMessages" :key="msg.created_at">
@@ -2725,7 +2760,7 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
                 </div>
                 <!-- Композер оператора (видим только в режиме takeover) -->
                 <div x-show="currentSession()?.human_takeover" class="p-4 border-t border-amber-200 bg-amber-50">
-                  <div class="text-xs font-semibold mb-2" style="color:#7A5A1A;">👤 Ответ от имени Аиши (вы ведёте диалог)</div>
+                  <div class="text-xs font-semibold mb-2" style="color:#7A5A1A;">👤 Ответ от имени бота (вы ведёте диалог)</div>
                   <div class="flex gap-2">
                     <textarea x-model="operatorText" rows="2"
                       @keydown.ctrl.enter.prevent="sendOperatorMessage()"
@@ -3348,12 +3383,19 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
                       </div>
                     </td>
                     <td class="px-4 py-3">
-                      <button x-show="!acc.online"
-                        @click="proRelogin(acc.phone)"
-                        class="bg-amber-500 hover:bg-amber-600 text-white px-3 py-1 rounded-lg text-xs transition flex items-center gap-1">
-                        🔑 Переавторизовать
-                      </button>
-                      <span x-show="acc.online" class="text-xs text-slate-400">—</span>
+                      <div class="flex items-center gap-2">
+                        <button x-show="!acc.online"
+                          @click="proRelogin(acc.phone)"
+                          class="bg-amber-500 hover:bg-amber-600 text-white px-3 py-1 rounded-lg text-xs transition">
+                          🔑 Переавторизовать
+                        </button>
+                        <button @click="proDeleteAccount(acc)"
+                          :disabled="proAccountBusy===acc.id"
+                          class="bg-red-500 hover:bg-red-600 disabled:opacity-50 text-white px-3 py-1 rounded-lg text-xs transition"
+                          title="Отключить и удалить аккаунт из проактивности">
+                          🗑 Удалить
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 </template>
@@ -3626,9 +3668,20 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
               Выберите диалог
             </div>
             <div x-show="proSelectedConv" class="flex flex-col h-full">
-              <div class="p-4 border-b border-slate-100 bg-slate-50">
-                <div class="font-semibold text-slate-800" x-text="proSelectedConv?.username||proSelectedConv?.name||'—'"></div>
-                <div class="text-xs text-slate-400" x-text="proSelectedConv?.campaign_name"></div>
+              <div class="p-4 border-b border-slate-100 bg-slate-50 flex items-center justify-between gap-3">
+                <div class="min-w-0">
+                  <div class="font-semibold text-slate-800 truncate" x-text="proSelectedConv?.username||proSelectedConv?.name||'—'"></div>
+                  <div class="text-xs text-slate-400 truncate" x-text="proSelectedConv?.campaign_name"></div>
+                </div>
+                <div class="flex items-center gap-2 shrink-0">
+                  <span x-show="proTakeoverActive" class="px-1.5 py-0.5 rounded-full text-[10px] font-medium" style="background:#FFF4E0; color:#7A5A1A;">👤 ручное</span>
+                  <button @click="proToggleTakeover()" :disabled="proTakeoverBusy"
+                          :class="proTakeoverActive?'bg-emerald-600 hover:bg-emerald-700':'bg-amber-600 hover:bg-amber-700'"
+                          class="text-white text-xs px-3 py-1.5 rounded-lg transition disabled:opacity-50"
+                          :title="proTakeoverActive?'Вернуть управление боту':'Взять диалог себе'">
+                    <span x-text="proTakeoverActive?'🤖 Вернуть боту':'👤 Взять управление'"></span>
+                  </button>
+                </div>
               </div>
               <div class="flex-1 overflow-auto p-4 space-y-3">
                 <template x-for="(msg,i) in proDialogMessages" :key="i">
@@ -3637,12 +3690,31 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
                         ?'bg-indigo-600 text-white rounded-2xl rounded-br-sm'
                         :'bg-slate-100 text-slate-800 rounded-2xl rounded-bl-sm'"
                       class="max-w-xs px-4 py-2 text-sm">
-                      <div x-text="msg.content"></div>
+                      <div x-text="msg.content" style="white-space:pre-wrap;"></div>
                       <div :class="msg.direction==='out'?'text-indigo-200':'text-slate-400'" class="text-xs mt-1"
                         x-text="new Date(msg.created_at).toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'})"></div>
                     </div>
                   </div>
                 </template>
+              </div>
+              <!-- Форма отправки от оператора: доступна всегда, но при активном takeover — подсвечена -->
+              <div class="p-3 border-t border-slate-100 bg-white">
+                <div class="flex gap-2 items-end">
+                  <textarea x-model="proReplyText" @keydown.enter.prevent="if(!$event.shiftKey && proTakeoverActive) proSendReply()"
+                            :disabled="!proTakeoverActive"
+                            :placeholder="proTakeoverActive?'Ваше сообщение клиенту (Enter — отправить, Shift+Enter — перенос)':'Сначала возьмите управление — только тогда можно писать'"
+                            rows="2"
+                            class="flex-1 px-3 py-2 rounded-[10px] text-[14px] resize-none disabled:opacity-50 disabled:cursor-not-allowed"
+                            style="border:0.5px solid #E2E2E2;"></textarea>
+                  <button @click="proSendReply()"
+                          :disabled="!proTakeoverActive || proReplyBusy || !proReplyText.trim()"
+                          class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-[10px] text-sm transition disabled:opacity-50 disabled:cursor-not-allowed">
+                    <span x-text="proReplyBusy?'…':'Отправить'"></span>
+                  </button>
+                </div>
+                <div class="text-[11px] text-slate-400 mt-1.5" x-show="!proTakeoverActive">
+                  Совет: возьмите управление кнопкой сверху, чтобы бот перестал отвечать автоматически.
+                </div>
               </div>
             </div>
           </div>
@@ -3662,12 +3734,12 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
 
             <div>
               <label class="text-[12px] font-medium text-slate-500">Имя бренда</label>
-              <input type="text" x-model="brandForm.brand_name" placeholder="404ai"
+              <input type="text" x-model="brandForm.brand_name" placeholder="Ваш бренд"
                      class="w-full mt-1 px-3 py-2 rounded-[10px] text-[14px]" style="border:0.5px solid #E2E2E2;" />
             </div>
             <div>
               <label class="text-[12px] font-medium text-slate-500">Имя ассистента</label>
-              <input type="text" x-model="brandForm.bot_name" placeholder="Аиша"
+              <input type="text" x-model="brandForm.bot_name" placeholder="Имя ассистента"
                      class="w-full mt-1 px-3 py-2 rounded-[10px] text-[14px]" style="border:0.5px solid #E2E2E2;" />
             </div>
             <div>
@@ -3704,17 +3776,17 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
             </div>
             <div>
               <label class="text-[12px] font-medium text-slate-500">Приветствие (первое сообщение)</label>
-              <textarea x-model="brandForm.greeting" rows="3" placeholder="Здравствуйте! Я Аиша…"
+              <textarea x-model="brandForm.greeting" rows="3" placeholder="Здравствуйте! Чем помочь?…"
                         class="w-full mt-1 px-3 py-2 rounded-[10px] text-[14px] resize-y" style="border:0.5px solid #E2E2E2; min-height:80px;"></textarea>
             </div>
             <div>
               <label class="text-[12px] font-medium text-slate-500">Текст подсказки (bubble рядом с виджетом)</label>
-              <input type="text" x-model="brandForm.nudge_text" placeholder='Нужна помощь? Спросите &lt;b&gt;Аишу&lt;/b&gt;'
+              <input type="text" x-model="brandForm.nudge_text" placeholder='Нужна помощь?'
                      class="w-full mt-1 px-3 py-2 rounded-[10px] text-[14px]" style="border:0.5px solid #E2E2E2;" />
             </div>
             <div>
               <label class="text-[12px] font-medium text-slate-500">Email менеджера (для эскалации)</label>
-              <input type="text" x-model="brandForm.manager_email" placeholder="ap@404ai.ru"
+              <input type="text" x-model="brandForm.manager_email" placeholder="you@company.ru"
                      class="w-full mt-1 px-3 py-2 rounded-[10px] text-[14px]" style="border:0.5px solid #E2E2E2;" />
             </div>
 
@@ -4092,7 +4164,23 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
 <script>
 function adminApp() {
   return {
-    authenticated: false, password: '', loginName: '', loginError: '', token: '', scope: 'full',
+    authenticated: false, password: '', loginName: '', loginError: '', token: '', scope: 'full', isEmbed: false,
+    // v1.1 embed-режим (PRM Online)
+    embedActorType: null,      // 'operator' | 'contact'
+    embedTenantId: null,
+    embedIntegrationId: null,
+    embedAllowedOrigins: [],
+    embedSessions: [],
+    embedLeads: [],
+    embedStats: null,
+    // true если открыт с dev/test-стенда (sslip.io или голый IP), false для прод admin.dirizher404.ru
+    get isTestServer() {
+      try {
+        const h = (typeof location !== 'undefined' ? location.hostname : '') || '';
+        return h.includes('sslip.io') || /^\d+\.\d+\.\d+\.\d+$/.test(h) || h.includes('217-149-25-34') || h.includes('217.149.25.34');
+      } catch { return false; }
+    },
+    isRecording: false, mediaRecorder: null, recordedChunks: [],
     b4Dialogs: [], b4Sel: null, b4Msgs: [], b4Leads: [], b4Tab: 'dialogs',
     aishaKb: { kb:'', scripts:'' },
     aishaStats: { leads_total: 0, leads_today: 0, sessions_total: 0, messages_24h: 0 },
@@ -4151,6 +4239,84 @@ function adminApp() {
         deal:        'background:#E3F5ED; color:#085041;',
         rejected:    'background:#FDE7E7; color:#8B1F1F;',
       })[s] || 'background:#EEF1F4;';
+    },
+
+    // ── v1.1 embed-режим: работа с /admin/api/embed/* ──────────────────────
+    async loadEmbedSessions() {
+      try {
+        const r = await fetch('/admin/api/embed/sessions', { credentials: 'include' });
+        if (r.status === 401) return this._notifyParent?.('AUTH_EXPIRED');
+        const j = await r.json();
+        this.embedSessions = j.sessions || [];
+      } catch (e) { console.error('embed/sessions', e); }
+    },
+    async loadEmbedLeads() {
+      try {
+        const r = await fetch('/admin/api/embed/leads', { credentials: 'include' });
+        if (r.status === 401) return this._notifyParent?.('AUTH_EXPIRED');
+        const j = await r.json();
+        this.embedLeads = j.leads || [];
+      } catch (e) { console.error('embed/leads', e); }
+    },
+    async loadEmbedStats() {
+      try {
+        const r = await fetch('/admin/api/embed/stats', { credentials: 'include' });
+        if (r.status === 401) return this._notifyParent?.('AUTH_EXPIRED');
+        this.embedStats = await r.json();
+        // ТЗ v1.1 § 6: UNREAD_CHANGED — только для contact-scope (свой счётчик)
+        //                для operator-scope считаем total активных как unread
+        const cnt = this.embedActorType === 'contact'
+          ? (this.embedStats?.my_active ?? 0)
+          : (this.embedStats?.new_count ?? 0);
+        this._notifyParent?.('UNREAD_CHANGED', { count: cnt });
+      } catch (e) { console.error('embed/stats', e); }
+    },
+    async embedLogout() {
+      try {
+        await fetch('/admin/api/embed/logout', { method: 'POST', credentials: 'include' });
+      } catch (_) {}
+      this._notifyParent?.('AUTH_EXPIRED');
+    },
+
+    // ── postMessage-контракт (ТЗ v1.1 § 6) ─────────────────────────────────
+    _notifyParent(type, payload = {}) {
+      const msg = { type, version: 1, payload };
+      const origins = this.embedAllowedOrigins.length ? this.embedAllowedOrigins : ['*'];
+      // targetOrigin='*' используем только когда allowedOrigins ещё не получены (первый READY);
+      // в prod _notifyParent будет знать точный origin родителя из /admin/api/embed/whoami.
+      origins.forEach(o => {
+        try { window.parent.postMessage(msg, o); } catch (_) {}
+      });
+    },
+    _setupPrmPostMessage() {
+      window.addEventListener('message', (e) => {
+        // валидация: origin ∈ allowedOrigins (если получены), event.source = window.parent
+        if (this.embedAllowedOrigins.length && !this.embedAllowedOrigins.includes(e.origin)) return;
+        if (e.source !== window.parent) return;
+        const msg = e.data;
+        if (!msg || typeof msg !== 'object' || msg.version !== 1) return;
+        switch (msg.type) {
+          case 'LOGOUT':
+            this.embedLogout();
+            break;
+          case 'RESIZE_HINT':
+            // родитель подсказал максимальную высоту — не используем в MVP, но принимаем
+            break;
+          case 'THEME':
+            if (msg.payload?.theme === 'dark') document.documentElement.classList.add('theme-dark');
+            else document.documentElement.classList.remove('theme-dark');
+            break;
+          default: /* игнорируем неизвестные типы */ break;
+        }
+      });
+    },
+    _startResizeObserver() {
+      try {
+        const ro = new ResizeObserver(() => {
+          this._notifyParent('RESIZE', { height: document.documentElement.scrollHeight });
+        });
+        ro.observe(document.body);
+      } catch (_) { /* браузер без ResizeObserver — не критично */ }
     },
 
     async loadPartners() {
@@ -4538,9 +4704,9 @@ function adminApp() {
       { color:'#57A3FD', q:'Какие навыки ещё в разработке?',
         a:'<b>Бета:</b> NPS-сбор (хранилище готово, не хватает триггера отправки). <b>Скоро:</b> капельный прогрев (drip), запись на встречу + напоминания, групповые брони, A/B-тесты рассылок, ROI-дашборд с учётом стоимости токенов. База данных уже подготовлена (23 таблицы, вью <span class="font-mono">v_skill_health</span>) — осталось подключить планировщик.' },
       { color:'#706E6B', q:'Где хранятся данные и как с безопасностью?',
-        a:'Все данные — в Postgres 16 внутри Docker на вашем сервере (217.149.25.34). Доступ к админке защищён <span class="font-mono">X-Admin-Token</span> из <span class="font-mono">.env</span>. HTTPS через Caddy с авто Let\'s Encrypt. Бэкап БД: <span class="font-mono">docker exec chatbot_postgres pg_dump -U chatbot_user chatbot_db &gt; backup.sql</span>.' },
+        a:'Все данные — в Postgres 16 внутри Docker на вашем сервере. Доступ к админке защищён <span class="font-mono">X-Admin-Token</span> из <span class="font-mono">.env</span>. HTTPS через Caddy с авто Let\'s Encrypt. Бэкап БД: <span class="font-mono">docker exec chatbot_postgres pg_dump -U chatbot_user chatbot_db &gt; backup.sql</span>.' },
       { color:'#04844B', q:'Как встроить виджет на сайт?',
-        a:'Копируете тег с вкладки «Виджет» в админке — он подставит правильный URL и брендинг. В упрощённом виде:<br><pre class="bg-slate-900 text-slate-100 rounded-lg p-3 mt-2 overflow-x-auto text-[11px]">&lt;script src="https://217-149-25-34.sslip.io/widget/chatbot-widget.js"\n  data-api-url="https://217-149-25-34.sslip.io"\n  data-company="Ваша компания"\n  data-color="#0176D3"&gt;&lt;/script&gt;</pre>' },
+        a:'Копируете тег с вкладки «Виджет» в админке — он подставит правильный URL и брендинг. В упрощённом виде:<br><pre class="bg-slate-900 text-slate-100 rounded-lg p-3 mt-2 overflow-x-auto text-[11px]">&lt;script src="https://bot.dirizher404.ru/api/widget-404.js"\n  data-api-url="https://bot.dirizher404.ru"\n  data-company="Ваша компания"\n  data-color="#0176D3"&gt;&lt;/script&gt;</pre>' },
       { color:'#0176D3', q:'Как обновлять и перезапускать?',
         a:'SSH на сервер → <span class="font-mono">cd /opt/chatbot/chatbot_project</span> → <span class="font-mono">docker compose logs -f chatbot</span> (логи), <span class="font-mono">docker compose restart chatbot</span> (рестарт), <span class="font-mono">docker compose build chatbot && docker compose up -d chatbot</span> (пересборка после правок кода).' },
     ],
@@ -4642,13 +4808,14 @@ function adminApp() {
       { id:'campaigns', label:'Кампании',     icon:'📣' },
       { id:'dialogs',   label:'Диалоги',      icon:'💬' },
     ],
-    proAccounts: [], proCampaigns: [], proConversations: [], proContacts: [],
+    proAccounts: [], proAccountBusy: null, proCampaigns: [], proConversations: [], proContacts: [],
     proSelectedCampaign: null, proContactsOpen: false, proContactsText: '',
     proContactsTab: 'manual',
     proFilePreview: [], proFileDupes: 0,
     proSegFilter: 'active_7d', proSegProduct: 'echolytics', proSegIndustry: '',
     proSegCount: 0, proSegSample: [], proSegLoading: false,
     proSelectedConv: null, proDialogMessages: [], proDialogFilter: '',
+    proTakeoverActive: false, proTakeoverBusy: false, proReplyText: '', proReplyBusy: false,
     proShowAddAccount: false, proShowNewCampaign: false,
     proPhone: '', proCode: '', proCodeSent: false, proPhoneCodeHash: '',
     proAddLoading: false, proAddError: '', proAddSuccess: '',
@@ -4665,7 +4832,7 @@ function adminApp() {
       });
     },
     get embedCode() {
-      if (this.scope === 'bot404') return `<script src="https://bot.217-149-25-34.sslip.io/api/widget-404.js" async><\/script>`;
+      if (this.scope === 'bot404') return `<script src="${this.botBase()}/api/widget-404.js" async><\/script>`;
       return `<script src="${this.wApiUrl}/widget/chatbot-widget.js"\n  data-api-url="${this.wApiUrl}"\n  data-company="${this.wCompany}"\n  data-color="${this.wColor}"\n  data-greeting="${this.wGreeting}">\n<\/script>`;
     },
 
@@ -4681,6 +4848,18 @@ function adminApp() {
 
     // Test chat
     testMessages: [], testSessionId: null, chatInput: '', chatSending: false,
+
+    // Сбрасываем всё, что относится к предыдущей сессии/тенанту при смене auth
+    _resetTestChat() {
+      this.testMessages = [];
+      this.testSessionId = null;
+      this.chatInput = '';
+      this.chatSending = false;
+      this.traceLog = [];
+      this.traceRouterLabel = '';
+      Object.keys(this.flowState).forEach(k => { this.flowState[k] = 'idle'; });
+      this.$nextTick(() => requestAnimationFrame(() => requestAnimationFrame(() => this.drawConnections?.())));
+    },
 
     // CSS class helper for nodes
     fn(node, color) {
@@ -4712,7 +4891,7 @@ function adminApp() {
       this.traceRouterLabel = (this.brandBotName || 'АИША').toUpperCase();
       await set('user','active',0);
       await set('memory','active',200);
-      await set('router','active',150); this.addTrace('🟢', (this.brandBotName || 'Аиша') + ' · оркестрация', null, 'router');
+      await set('router','active',150); this.addTrace('🟢', (this.brandBotName || 'ассистент') + ' · оркестрация', null, 'router');
       await set('direct','active',350); this.addTrace('✍️','Черновик (flash-lite)',null,'agent');
       await set('rag','active',200);
       await set('direct','done',450);
@@ -4815,7 +4994,7 @@ function adminApp() {
         const _botHost = (window.location.hostname || '').replace(/^admin\./, 'bot.');
         const _url = this.scope==='bot404'
           ? (_botHost.startsWith('bot.') ? 'https://' + _botHost + '/api/sales-chat'
-                                         : 'https://bot.217-149-25-34.sslip.io/api/sales-chat')
+                                         : this.botBase() + '/api/sales-chat')
           : '/chat';
         const r = await fetch(_url, {
           method: 'POST',
@@ -4848,6 +5027,118 @@ function adminApp() {
     scrollChat() {
       const el = document.getElementById('chat-messages');
       if (el) el.scrollTop = el.scrollHeight;
+    },
+
+    // Приём файла (image/audio) через input[type=file] в тест-чате.
+    async handleTestFile(ev) {
+      const file = ev.target.files && ev.target.files[0];
+      if (!file) return;
+      ev.target.value = '';   // сброс, чтобы можно было выбрать тот же файл повторно
+      if (file.size > 7 * 1024 * 1024) {
+        this.showToast('Файл слишком большой (максимум 7 МБ)', 'error');
+        return;
+      }
+      const kind = file.type.startsWith('image/') ? 'image'
+                 : file.type.startsWith('audio/') ? 'audio' : '';
+      if (!kind) { this.showToast('Поддерживаются только image/* и audio/*', 'error'); return; }
+      const b64 = await this._fileToBase64(file);
+      await this.sendTestMediaMessage({ type: kind, mime: file.type, data_b64: b64, label: file.name });
+    },
+
+    // Запись голосового через MediaRecorder API.
+    async toggleVoiceRecord() {
+      if (this.isRecording) {
+        // остановить и отправить
+        this.mediaRecorder?.stop();
+        return;
+      }
+      if (!navigator.mediaDevices?.getUserMedia) {
+        this.showToast('Браузер не поддерживает запись звука', 'error');
+        return;
+      }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        // предпочитаем webm/opus (широко поддерживается + Whisper понимает)
+        const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+          ? 'audio/webm;codecs=opus'
+          : (MediaRecorder.isTypeSupported('audio/mp4') ? 'audio/mp4' : '');
+        const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+        this.recordedChunks = [];
+        rec.ondataavailable = (e) => { if (e.data && e.data.size > 0) this.recordedChunks.push(e.data); };
+        rec.onstop = async () => {
+          stream.getTracks().forEach(t => t.stop());
+          this.isRecording = false;
+          const blob = new Blob(this.recordedChunks, { type: rec.mimeType || 'audio/webm' });
+          if (blob.size < 500) { this.showToast('Запись пустая', 'error'); return; }
+          const b64 = await this._blobToBase64(blob);
+          await this.sendTestMediaMessage({ type: 'audio', mime: blob.type, data_b64: b64, label: 'voice' });
+        };
+        this.mediaRecorder = rec;
+        this.isRecording = true;
+        rec.start();
+      } catch (e) {
+        this.showToast('Нет доступа к микрофону: ' + e.message, 'error');
+        this.isRecording = false;
+      }
+    },
+
+    _fileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result).split(',')[1] || '');
+        r.onerror = reject;
+        r.readAsDataURL(file);
+      });
+    },
+    _blobToBase64(blob) { return this._fileToBase64(blob); },
+
+    async sendTestMediaMessage(media) {
+      if (this.chatSending) return;
+      this.chatSending = true;
+      this.traceLog = [];
+      this.resetFlow();
+      // Локально показываем placeholder-сообщение от юзера
+      const label = media.type === 'image' ? '📷 Отправлено изображение' : '🎙 Отправлено голосовое';
+      this.testMessages.push({ role: 'user', content: label + (media.label ? ' · ' + media.label : '') });
+      this.$nextTick(() => this.scrollChat());
+      try {
+        const _botHost = (window.location.hostname || '').replace(/^admin\./, 'bot.');
+        const _url = this.scope === 'bot404'
+          ? (_botHost.startsWith('bot.') ? 'https://' + _botHost + '/api/sales-chat'
+                                         : this.botBase() + '/api/sales-chat')
+          : '/chat';
+        const r = await fetch(_url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Tenant-Slug': this.tenantSlug || '' },
+          body: JSON.stringify({
+            session_id: this.testSessionId,
+            media: { type: media.type, mime: media.mime, data_b64: media.data_b64 },
+          }),
+        });
+        const data = await r.json();
+        if (r.ok) {
+          this.testSessionId = data.session_id;
+          // Показываем распознанный текст как подсказку под user-сообщением
+          const recognized = data._recognized_text || '';
+          if (recognized) {
+            const last = this.testMessages[this.testMessages.length - 1];
+            if (last) last.content = last.content + '\n\n' + recognized;
+          }
+          this.testMessages.push({
+            role: 'assistant',
+            content: data.reply || data.response || '(пусто)',
+            intent: data.intent,
+            usedLlm: data.used_llm_for_routing,
+          });
+          this.$nextTick(() => this.scrollChat());
+        } else {
+          this.testMessages.push({ role: 'assistant', content: '❌ Ошибка: ' + (data.detail || data.error || 'неизвестная') });
+        }
+      } catch (e) {
+        this.testMessages.push({ role: 'assistant', content: '❌ Нет соединения: ' + e.message });
+      } finally {
+        this.chatSending = false;
+      }
     },
 
     // ── SVG connections ───────────────────────────────────────────────────
@@ -5045,6 +5336,7 @@ function adminApp() {
         const r = await fetch('/admin/api/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ login: this.loginName, password: this.password }) });
         if (r.ok) {
           const d = await r.json();
+          this._resetTestChat();
           this.token = d.token; this.scope = d.scope || 'full'; this.loginName = d.login || this.loginName;
           this.tenantSlug = d.tenant_slug || '';
           this.authenticated = true;
@@ -5060,19 +5352,22 @@ function adminApp() {
     },
 
     logout() {
+      this._resetTestChat();
       this.authenticated = false; this.token = ''; this.password = ''; this.loginName = ''; this.scope = 'full'; this.page = 'dashboard'; this.theme = '404';
+      this.tenantSlug = ''; this.brandBotName = ''; this.brandName = ''; this.brandRoleSubtitle = '';
       this.isImpersonating = false; this.impersonateInfo = null;
-      try { sessionStorage.removeItem('adminToken'); sessionStorage.removeItem('adminScope'); sessionStorage.removeItem('impInfo'); } catch(e) {}
+      try { sessionStorage.removeItem('adminToken'); sessionStorage.removeItem('adminScope'); sessionStorage.removeItem('adminTenantSlug'); sessionStorage.removeItem('impInfo'); } catch(e) {}
     },
+    botBase(){ const h=(window.location.hostname||'').replace(/^admin\./,'bot.'); return h.startsWith('bot.') ? 'https://'+h : 'https://bot.dirizher404.ru'; },
     async loadAll() {
       if (this.scope === 'bot404') {
-        this.wCompany = (this.brandName || '404ai') + ' · ' + (this.brandBotName || 'Аиша');
+        this.wCompany = (this.brandName || 'Дирижёр') + (this.brandBotName ? ' · ' + this.brandBotName : '');
         this.wColor = '#0B8A5B';
-        this.wApiUrl = 'https://bot.217-149-25-34.sslip.io';
-        this.wGreeting = 'Здравствуйте! Я ' + (this.brandBotName || 'Аиша') + ' — помогу подобрать решение.';
-        // KB Аиши тянется только для реального tenant=aisha (у остальных этого endpoint нет)
+        this.wApiUrl = this.botBase();
+        this.wGreeting = 'Здравствуйте! Я ' + (this.brandBotName || 'ассистент') + ' — помогу подобрать решение.';
+        // KB движка тянется только для реального tenant=aisha (у остальных этого endpoint нет)
         if (this.tenantSlug === 'aisha') {
-          try { const kr = await fetch('https://bot.217-149-25-34.sslip.io/api/admin/bot404/kb', { headers: { 'X-Admin-Token': this.token || '' } }); if (kr.ok) { const d = await kr.json(); this.aishaKb = {kb:d.kb||'', scripts:d.scripts||''}; if (d.skills) this.skills = d.skills; if (d.agents) this.agentConfigs = d.agents; } } catch(e) {}
+          try { const kr = await fetch(this.botBase()+'/api/admin/bot404/kb', { headers: { 'X-Admin-Token': this.token || '' } }); if (kr.ok) { const d = await kr.json(); this.aishaKb = {kb:d.kb||'', scripts:d.scripts||''}; if (d.skills) this.skills = d.skills; if (d.agents) this.agentConfigs = d.agents; } } catch(e) {}
         }
       }
       await this.refreshStats();
@@ -5130,7 +5425,7 @@ function adminApp() {
           const r = await fetch('/admin/api/bot404/stats', { headers: this.h() });
           if (r.ok) { const d = await r.json(); this.stats = d.stats; this.extStats = d.extStats; }
         } else { const r = await fetch('/health'); this.stats = await r.json(); }
-        // Дополнительно — данные Аиши (лиды) для дашборда, всегда показываем
+        // Дополнительно — данные лидов для дашборда, всегда показываем
         try {
           const ar = await fetch('/admin/api/bot404/stats', { headers: this.h() });
           if (ar.ok) {
@@ -5298,7 +5593,7 @@ function adminApp() {
           const r = await fetch('/admin/api/bot404/transcript?sid='+encodeURIComponent(id), { headers: this.h() });
           if (r.ok) { const d = await r.json(); this.sessionMessages = (d.messages||[]).map(m => ({ role: m.direction==='in'?'user':'assistant', content: m.text, created_at: m.created_at })); }
         } else {
-          const r = await fetch(`/history/${id}`);
+          const r = await fetch(`/history/${encodeURIComponent(id)}`, { headers: this.h() });
           if (r.ok) this.sessionMessages = await r.json();
         }
         // session_facts (structured memory о клиенте — для tenant=bot404)
@@ -5492,6 +5787,21 @@ function adminApp() {
       // Скролл вверх чтобы форма была видна
       this.$nextTick(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
     },
+    async proDeleteAccount(acc) {
+      if (!confirm(`Удалить аккаунт ${acc.phone} из проактивности?\n\nMTProto-клиент будет остановлен, запись удалена.\nЕсли есть привязанные кампании — сначала удалите их.`)) return;
+      this.proAccountBusy = acc.id;
+      try {
+        const r = await fetch(`/admin/api/proactive/accounts/${acc.id}`, { method:'DELETE', headers: this.h() });
+        if (!r.ok) {
+          const err = await r.json().catch(()=>({}));
+          throw new Error(err.detail || ('HTTP ' + r.status));
+        }
+        this.showToast?.('Аккаунт удалён', 'success');
+        await this.proLoadAccounts();
+      } catch (e) {
+        this.showToast?.('Не удалось удалить: ' + (e.message || e), 'error');
+      } finally { this.proAccountBusy = null; }
+    },
     async proRequestCode() {
       this.proAddLoading = true; this.proAddError = ''; this.proAddSuccess = '';
       try {
@@ -5644,8 +5954,51 @@ function adminApp() {
     },
     async proOpenDialog(conv) {
       this.proSelectedConv = conv;
+      this.proReplyText = '';
+      this.proTakeoverActive = !!conv.human_takeover;
       const r = await fetch(`/admin/api/proactive/conversations/${conv.id}`, { headers: this.h() });
       this.proDialogMessages = await r.json();
+    },
+    async proToggleTakeover() {
+      if (!this.proSelectedConv || this.proTakeoverBusy) return;
+      const target = !this.proTakeoverActive;
+      this.proTakeoverBusy = true;
+      try {
+        const r = await fetch(`/admin/api/proactive/conversations/${this.proSelectedConv.id}/takeover`, {
+          method: 'POST', headers: { ...this.h(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: target }),
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        this.proTakeoverActive = target;
+        if (this.proSelectedConv) this.proSelectedConv.human_takeover = target;
+        this.showToast?.(target ? 'Вы взяли управление' : 'Управление вернулось боту', 'success');
+      } catch (e) {
+        this.showToast?.('Не удалось переключить: ' + (e.message || e), 'error');
+      } finally { this.proTakeoverBusy = false; }
+    },
+    async proSendReply() {
+      const text = (this.proReplyText || '').trim();
+      if (!text || !this.proSelectedConv || this.proReplyBusy) return;
+      this.proReplyBusy = true;
+      try {
+        const r = await fetch(`/admin/api/proactive/conversations/${this.proSelectedConv.id}/reply`, {
+          method: 'POST', headers: { ...this.h(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        });
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({}));
+          throw new Error(err.detail || ('HTTP ' + r.status));
+        }
+        this.proReplyText = '';
+        // Сразу подгружаем актуальный список из БД (запись синхронная — уже там).
+        // proOpenDialog сбрасывает selection — используем прямой fetch, чтобы сохранить selection.
+        try {
+          const rf = await fetch(`/admin/api/proactive/conversations/${this.proSelectedConv.id}`, { headers: this.h() });
+          if (rf.ok) this.proDialogMessages = await rf.json();
+        } catch (_) {}
+      } catch (e) {
+        this.showToast?.('Не отправилось: ' + (e.message || e), 'error');
+      } finally { this.proReplyBusy = false; }
     },
 
     // ── Realtime polling ──────────────────────────────────────────────────
@@ -5661,6 +6014,17 @@ function adminApp() {
         // обновим текущий открытый раздел
         if (this.page === 'dashboard') this.refreshExtStats?.();
         if (this.page === 'conversations') this.loadSessions?.();
+        // Проактивность: реалтайм — обновляем список диалогов и открытый диалог
+        if (this.page === 'proactive' && this.proTab === 'dialogs') {
+          this.proLoadConversations?.();
+          if (this.proSelectedConv) {
+            // тихо обновляем сообщения открытого диалога — без сброса скролла и selection
+            fetch(`/admin/api/proactive/conversations/${this.proSelectedConv.id}`, { headers: this.h() })
+              .then(r => r.ok ? r.json() : null)
+              .then(d => { if (d && Array.isArray(d) && d.length !== this.proDialogMessages.length) this.proDialogMessages = d; })
+              .catch(() => {});
+          }
+        }
         // KB polling убран — данные меняются редко, поллинг создавал моргание списка
       }, 5000);
     },
@@ -5681,7 +6045,7 @@ function adminApp() {
       const imp = params.get('imp');
       if (!imp) return false;
       try {
-        const r = await fetch('https://bot.217-149-25-34.sslip.io/api/admin/impersonate/consume', {
+        const r = await fetch(this.botBase()+'/api/admin/impersonate/consume', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ token: imp }),
@@ -5695,12 +6059,16 @@ function adminApp() {
         });
         if (lr.ok) {
           const ld = await lr.json();
+          this._resetTestChat();
           this.token = ld.token; this.scope = ld.scope; this.loginName = '404ai';
+          // impersonate: смотрим глазами target_slug, а не своими
+          this.tenantSlug = d.target_slug || ld.tenant_slug || '';
           this.authenticated = true;
           this.isImpersonating = true;
           this.impersonateInfo = { target_slug: d.target_slug, root_email: d.root_email };
           sessionStorage.setItem('adminToken', this.token);
           sessionStorage.setItem('adminScope', this.scope);
+          sessionStorage.setItem('adminTenantSlug', this.tenantSlug);
           sessionStorage.setItem('impInfo', JSON.stringify(this.impersonateInfo));
           if (this.scope === 'bot404') this.page = 'conversations';
           this.theme = '404';
@@ -5715,6 +6083,70 @@ function adminApp() {
     },
 
     async init() {
+      // 0. PRM iframe SSO. Порядок попыток:
+      //    (A) v1.1: cookie orchestra_sess + /admin/api/embed/whoami — новая модель operators/contacts;
+      //    (B) legacy: старый /admin/api/whoami — JWT-based, обратная совместимость.
+      const embedFlag = new URLSearchParams(location.search).get('embed') === '1';
+      if (embedFlag) {
+        // (A) v1.1 embed-session
+        try {
+          const r = await fetch('/admin/api/embed/whoami', { credentials: 'include' });
+          if (r.ok) {
+            const d = await r.json();
+            this.embedActorType = d.actor_type;
+            this.embedTenantId  = d.tenant_id;
+            this.embedIntegrationId = d.integration_id;
+            this.tenantSlug = '';
+            this.authenticated = true;
+            this.isEmbed = true;
+            this.page = 'conversations';
+            this.theme = '404';
+            document.documentElement.classList.add('prm-embed');
+            document.documentElement.classList.add('prm-embed-' + d.actor_type);
+            // postMessage-контракт (Ответ #8 из ТЗ v1.1)
+            this._setupPrmPostMessage?.();
+            this._notifyParent?.('READY', { actor_type: d.actor_type, tenant_id: d.tenant_id });
+            this._startResizeObserver?.();
+            // Данные через новые embed-endpoints + NAVIGATE postMessage
+            this.$watch('page', p => {
+              if (p === 'conversations') this.loadEmbedSessions?.();
+              if (p === 'leads') this.loadEmbedLeads?.();
+              // ТЗ v1.1 § 6: NAVIGATE — путь без параметров
+              this._notifyParent?.('NAVIGATE', { route: '/' + p });
+            });
+            await this.loadEmbedSessions?.();
+            // сразу подтянуть stats + отправить UNREAD_CHANGED первым разом
+            await this.loadEmbedStats?.();
+            return;
+          } else if (r.status === 401) {
+            this._notifyParent?.('AUTH_EXPIRED');
+          }
+        } catch (_) { /* fallthrough к legacy */ }
+        // (B) legacy JWT-cookie
+        try {
+          const r = await fetch('/admin/api/whoami', { credentials: 'include' });
+          if (r.ok) {
+            const d = await r.json();
+            this.token = d.token;
+            this.scope = d.scope || 'bot404';
+            this.tenantSlug = '';
+            this.authenticated = true;
+            this.isEmbed = true;
+            this.page = 'conversations';
+            this.theme = '404';
+            document.documentElement.classList.add('prm-embed');
+            await this.loadBranding?.();
+            await this.loadAll?.();
+            this.$watch('page', p => {
+              if (p === 'conversations') this.loadSessions();
+              if (p === 'kb') this.loadKbDocs();
+              if (p === 'leads') this.loadLeads();
+            });
+            if (this.authenticated) this.startPolling?.();
+            return;
+          }
+        } catch (_) { /* fallthrough — обычный login */ }
+      }
       // 1. Сначала пробуем impersonate (если ?imp= в URL)
       if (await this.tryImpersonateFromUrl()) {
         return;
@@ -5723,8 +6155,9 @@ function adminApp() {
       if (savedImp) { try { this.impersonateInfo = JSON.parse(savedImp); this.isImpersonating = true; } catch (_) {} }
       const saved = sessionStorage.getItem('adminToken');
       const savedScope = sessionStorage.getItem('adminScope');
-      if (saved && savedScope) { this.token = saved; this.scope = savedScope; this.authenticated = true; if (this.scope==='bot404') this.page='conversations'; this.theme='404'; this.loadAll(); }
-      else { try { sessionStorage.removeItem('adminToken'); sessionStorage.removeItem('adminScope'); sessionStorage.removeItem('impInfo'); } catch(e) {} }
+      const savedTenant = sessionStorage.getItem('adminTenantSlug');
+      if (saved && savedScope) { this.token = saved; this.scope = savedScope; this.tenantSlug = savedTenant || ''; this.authenticated = true; if (this.scope==='bot404') this.page='conversations'; this.theme='404'; this.loadBranding?.(); this.loadAll(); }
+      else { try { sessionStorage.removeItem('adminToken'); sessionStorage.removeItem('adminScope'); sessionStorage.removeItem('adminTenantSlug'); sessionStorage.removeItem('impInfo'); } catch(e) {} }
       this.$watch('page', p => {
         if (p === 'conversations') this.loadSessions();
         if (p === 'kb') this.loadKbDocs();
@@ -5822,7 +6255,7 @@ function adminApp() {
     </div>
     <div class="px-4 py-2 border-t flex items-center justify-between" style="border-color:#ECECEC; background:#FAFAFA;">
       <div class="text-[11px]" style="color:#8A8A90;">↑↓ навигация · ↵ выбрать</div>
-      <div class="text-[11px]" style="color:#8A8A90;">404ai</div>
+      <div class="text-[11px]" style="color:#8A8A90;">Дирижёр</div>
     </div>
   </div>
 </div>

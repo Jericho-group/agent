@@ -9,11 +9,13 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import random
 import uuid
 from datetime import date, datetime
 
 import asyncpg
+import httpx
 
 from agents.orchestrator import Orchestrator
 from config import settings
@@ -22,6 +24,12 @@ from proactive import tg_client
 
 _orchestrator = Orchestrator()
 _memory = DialogueMemory()
+
+# Unified pipeline: инкоминг проактивки идёт через тот же /api/sales-chat что и
+# веб-виджет/Авито/Telegram-бот — правила тенанта, human_takeover, ack-strip,
+# захват лида + notifyLeadRouted работают одинаково. bot404 — service name в
+# docker network, порт 8090 внутренний.
+_BOT404_INTERNAL = os.environ.get("BOT404_INTERNAL_URL", "http://bot404:8090")
 
 # contact_id → session_id оркестратора (in-memory кэш)
 _contact_sessions: dict[int, str] = {}
@@ -287,69 +295,101 @@ async def _run_queue(campaign_id: int):
 # ── Обработка входящих ответов ────────────────────────────────────────────────
 
 async def handle_incoming(phone: str, username: str, tg_user_id: int, text: str):
-    """Вызывается при входящем сообщении. Передаёт в оркестратор и отвечает."""
-    print(f"[TG incoming] from=@{username} (id={tg_user_id}) text={text!r}")
-    conn = await _get_db()
+    """Вызывается при входящем сообщении от клиента в user-mode Telegram.
 
-    # Ищем контакт по username (с @ и без) или по tg_user_id
-    clean = username.lstrip("@")
+    Идёт через тот же /api/sales-chat что и остальные каналы (веб/Авито/TG-бот)
+    — тенант-специфичный промпт, human_takeover, ack-strip, захват лида,
+    notifyLeadRouted, Whisper/Vision — всё работает автоматически.
+    """
+    print(f"[TG incoming] from=@{username} (id={tg_user_id}) text={text!r}")
+
+    conn = await _get_db()
+    # JOIN до тенанта и слуга — нужен X-Tenant-Slug для sales-chat.
     contact = await conn.fetchrow("""
-        SELECT cc.*, c.goal, c.account_id,
-               a.phone AS account_phone
-        FROM campaign_contacts cc
-        JOIN campaigns c ON c.id = cc.campaign_id
-        JOIN tg_accounts a ON a.id = c.account_id
-        WHERE (
-            cc.username = $1 OR cc.username = $2 OR cc.username = $3
-            OR cc.tg_user_id = $4
-        )
-        ORDER BY cc.sent_at DESC NULLS LAST LIMIT 1
-    """, clean, f"@{clean}", str(tg_user_id), tg_user_id)
+        SELECT cc.*, c.goal, c.account_id, c.tenant_id AS c_tenant_id,
+               a.phone AS account_phone,
+               t.slug  AS tenant_slug
+          FROM campaign_contacts cc
+          JOIN campaigns    c ON c.id = cc.campaign_id
+          JOIN tg_accounts  a ON a.id = c.account_id
+          JOIN tenants      t ON t.id = c.tenant_id
+         WHERE (cc.username = $1 OR cc.username = $2 OR cc.username = $3
+                OR cc.tg_user_id = $4)
+         ORDER BY cc.sent_at DESC NULLS LAST LIMIT 1
+    """, username.lstrip("@"), f"@{username.lstrip('@')}", str(tg_user_id), tg_user_id)
     await conn.close()
 
     if not contact:
-        # Контакт не найден — сохраняем на будущее и отвечаем базово
-        print(f"[TG incoming] контакт @{username} не найден в базе, пропускаем")
+        print(f"[TG incoming] контакт @{username} не найден в базе — пропускаем")
         return
 
     contact_id = contact["id"]
-    session_id = contact["session_id"] or _contact_sessions.get(contact_id) or str(uuid.uuid4())
+    tenant_slug = contact["tenant_slug"]
+    # session_id формат proactive-tg:<contact_id> — изолирован от avito:*/tg:*/веб-сессий
+    session_id = contact["session_id"] or _contact_sessions.get(contact_id) or f"proactive-tg:{contact_id}"
+    _contact_sessions[contact_id] = session_id
 
-    # Сохраняем входящее сообщение
+    # Сохраняем входящее в outreach_messages (для проактивной вкладки «Диалоги»).
     conn = await _get_db()
-    await conn.execute("""
-        INSERT INTO outreach_messages (contact_id, direction, content)
-        VALUES ($1,'in',$2)
-    """, contact_id, text)
     await conn.execute(
-        "UPDATE campaign_contacts SET status='replied' WHERE id=$1", contact_id
+        "INSERT INTO outreach_messages (contact_id, direction, content) VALUES ($1,'in',$2)",
+        contact_id, text,
+    )
+    # Заполняем tg_user_id при первом контакте — без него отправка reply через
+    # «Взять управление» падала HTTP 400 «no tg_user_id on contact». Обновляем
+    # только если ещё пустой, чтобы не перезатирать (@username может измениться,
+    # tg_user_id — стабильный идентификатор).
+    await conn.execute(
+        "UPDATE campaign_contacts SET status='replied', tg_user_id=COALESCE(tg_user_id, $2) WHERE id=$1",
+        contact_id, tg_user_id,
     )
     await conn.close()
 
-    # Запускаем оркестратор
+    # Единая логика бота: тот же /api/sales-chat что и у веб/Авито/TG-бота.
+    response = None
+    takeover = False
     try:
-        from router.intent_router import classify_intent
-        history = await _memory.get_history(session_id, limit=6)
-        intent_result = classify_intent(text, history)
-        response = await _orchestrator.process(
-            message=text,
-            session_id=session_id,
-            intent_result=intent_result,
-        )
-        print(f"[TG outgoing] → @{username}: {response!r}")
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(
+                f"{_BOT404_INTERNAL}/api/sales-chat",
+                json={"session_id": session_id, "message": text},
+                headers={
+                    "X-Tenant-Slug": tenant_slug or "aisha",
+                    # рейт-лимитим на конкретного клиента чата, не на общий bot404
+                    "X-Real-IP": f"proactive-tg-{contact_id}",
+                },
+            )
+            data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+            takeover = bool(data.get("_takeover"))
+            response = str(data.get("reply") or "").strip()
     except Exception as e:
-        print(f"[TG orchestrator ERROR] {e}")
+        print(f"[proactive-tg] sales-chat FAIL: {e}")
+        response = ""
+
+    if takeover:
+        # Оператор ведёт диалог из ЛК → бот молчит. Ответ оператора уходит
+        # через POST /admin/api/proactive/manual-send (см. main.py).
+        print(f"[proactive-tg] takeover active for sid={session_id} — бот молчит")
+        return
+
+    if not response:
+        # Fallback чтобы клиент не остался без ответа при ошибке sales-chat
         response = "Спасибо за ответ, скоро свяжемся с вами!"
 
-    # Отправляем ответ — используем int user_id (с кэшем entity)
-    await tg_client.send_message(phone, tg_user_id, response)
+    # Отправляем ответ клиенту через user-mode Telegram
+    try:
+        await tg_client.send_message(phone, tg_user_id, response)
+        print(f"[proactive-tg outgoing] → @{username}: {response!r}")
+    except Exception as e:
+        print(f"[proactive-tg send FAIL] {e}")
+        return
 
-    # Сохраняем исходящий ответ
+    # Логируем ответ в outreach_messages (для UI-вкладки «Диалоги»)
     conn = await _get_db()
-    await conn.execute("""
-        INSERT INTO outreach_messages (contact_id, direction, content)
-        VALUES ($1,'out',$2)
-    """, contact_id, response)
+    await conn.execute(
+        "INSERT INTO outreach_messages (contact_id, direction, content) VALUES ($1,'out',$2)",
+        contact_id, response,
+    )
     await conn.close()
 
 

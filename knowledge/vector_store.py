@@ -23,6 +23,19 @@ _conn: psycopg2.extensions.connection | None = None
 
 def _get_conn() -> psycopg2.extensions.connection:
     global _conn
+    # Managed-БД рвёт idle-соединение серверно — при этом _conn.closed остаётся 0,
+    # а следующий execute падает 'SSL connection has been closed unexpectedly'
+    # (500 в разделе «База знаний» ЛК). Поэтому пингуем и переоткрываем при сбое живости.
+    if _conn is not None and not _conn.closed:
+        try:
+            with _conn.cursor() as _c:
+                _c.execute("SELECT 1")
+        except Exception:
+            try:
+                _conn.close()
+            except Exception:
+                pass
+            _conn = None
     if _conn is None or _conn.closed:
         _conn = psycopg2.connect(dsn=settings.supabase_db_url)
         _conn.autocommit = True

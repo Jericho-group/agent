@@ -76,6 +76,21 @@ def set_incoming_handler(fn: Callable):
     _on_incoming = fn
 
 
+async def stop_client(phone: str) -> bool:
+    """Останавливает MTProto клиент, отключает соединение и убирает из кэша.
+    Возвращает True если клиент был активен и остановлен."""
+    client = _clients.pop(phone, None)
+    _account_ids.pop(phone, None)
+    _entity_cache.pop(phone, None)
+    if client is None:
+        return False
+    try:
+        await client.disconnect()
+    except Exception as e:
+        print(f"[TG] stop_client({phone}) disconnect fail: {e}")
+    return True
+
+
 async def _get_db() -> asyncpg.Connection:
     return await asyncpg.connect(settings.supabase_db_url)
 
@@ -121,12 +136,59 @@ async def load_active_accounts():
             await _start_client(row["phone"], sess, row["id"])
 
 
+def _tg_proxy():
+    """Прокси для Telethon. Приоритет:
+    1) MTProxy (`TG_MTPROXY_HOST/PORT/SECRET`) — нативный Telegram-протокол, работает даже
+       через РКН-блокировки и FakeTLS-маскировку (secret с префиксом ee).
+    2) SOCKS5 (`TG_SOCKS_HOST/PORT`) — общий SOCKS5 через SSH-туннель.
+    3) None — прямое соединение (только для незаблокированных сетей).
+    Формат MTProxy: (server, port, secret) без `tg://proxy?...`, только hex secret.
+    """
+    mt_host = os.environ.get("TG_MTPROXY_HOST", "").strip()
+    mt_port = os.environ.get("TG_MTPROXY_PORT", "").strip()
+    mt_secret = os.environ.get("TG_MTPROXY_SECRET", "").strip()
+    if mt_host and mt_port and mt_secret:
+        return (mt_host, int(mt_port), mt_secret)
+    host = os.environ.get("TG_SOCKS_HOST", "").strip()
+    port_s = os.environ.get("TG_SOCKS_PORT", "").strip()
+    if host and port_s:
+        try:
+            import python_socks  # noqa: F401
+        except ImportError:
+            print("[tg-client] TG_SOCKS_HOST задан, но python-socks не установлен — прокси пропущен")
+            return None
+        return ("socks5", host, int(port_s), True)
+    return None
+
+
+def _tg_connection():
+    """Если задан MTProxy — используем MTProxy-соединение вместо TCP."""
+    if os.environ.get("TG_MTPROXY_HOST", "").strip():
+        try:
+            from telethon.network import ConnectionTcpMTProxyRandomizedIntermediate
+            return ConnectionTcpMTProxyRandomizedIntermediate
+        except ImportError:
+            pass
+    return None
+
+
+_USE_IPV6 = os.environ.get("TG_USE_IPV6", "1").lower() not in ("0", "false", "no")
+
+
+def _mk_client(session):
+    """Собирает TelegramClient с учётом прокси-конфига (MTProxy → SOCKS5 → прямое)."""
+    kwargs = {"use_ipv6": _USE_IPV6}
+    proxy = _tg_proxy()
+    if proxy:
+        kwargs["proxy"] = proxy
+    conn = _tg_connection()
+    if conn:
+        kwargs["connection"] = conn
+    return TelegramClient(session, TG_API_ID, TG_API_HASH, **kwargs)
+
+
 async def _start_client(phone: str, session_str: str, account_id: int):
-    client = TelegramClient(
-        StringSession(session_str),
-        TG_API_ID,
-        TG_API_HASH,
-    )
+    client = _mk_client(StringSession(session_str))
     await client.connect()
     if not await client.is_user_authorized():
         print(f"[TG] Аккаунт {phone} — сессия устарела, нужна переавторизация")
@@ -142,7 +204,7 @@ async def _start_client(phone: str, session_str: str, account_id: int):
 
 async def request_code(phone: str) -> dict:
     """Отправляет код подтверждения. Возвращает phone_code_hash и тип доставки."""
-    client = TelegramClient(StringSession(), TG_API_ID, TG_API_HASH)
+    client = _mk_client(StringSession())
     await client.connect()
     result = await client.send_code_request(phone)
     code_type = type(result.type).__name__

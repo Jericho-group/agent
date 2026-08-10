@@ -18,7 +18,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -46,12 +46,32 @@ async def lifespan(app: FastAPI):
     if doc_count == 0:
         print("[startup] WARNING: Knowledge base is empty. Run: python ingest_data.py")
 
-    # Загружаем Telegram-аккаунты и подписываемся на входящие
+    # Telegram-аккаунты грузим В ФОНЕ — MTProto-коннект может ретраить минуты
+    # (например при блокировке IPv4 у РКН), а Uvicorn не должен блокироваться.
     tg_client.set_incoming_handler(campaign_manager.handle_incoming)
-    await tg_client.load_active_accounts()
-    print("[startup] Proactive TG module ready")
+    import asyncio as _asyncio
+    _asyncio.create_task(tg_client.load_active_accounts())
+    print("[startup] Proactive TG module scheduled (background)")
     yield
 
+
+# Sentry / GlitchTip error tracking — включается через SENTRY_DSN env
+_SENTRY_DSN = os.environ.get("SENTRY_DSN", "").strip()
+if _SENTRY_DSN:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+        from sentry_sdk.integrations.asyncpg import AsyncPGIntegration
+        sentry_sdk.init(
+            dsn=_SENTRY_DSN,
+            environment=os.environ.get("SENTRY_ENV", "prod"),
+            traces_sample_rate=0.0,
+            send_default_pii=False,
+            integrations=[FastApiIntegration(), AsyncPGIntegration()],
+        )
+        print(f"[sentry] initialised env={os.environ.get('SENTRY_ENV','prod')}")
+    except Exception as _e:
+        print(f"[sentry] init failed: {_e}")
 
 app = FastAPI(
     title=f"{settings.company_name} Chatbot API",
@@ -178,6 +198,36 @@ def _check_admin(x_admin_token: str = Header(default="")):
             raise HTTPException(status_code=401, detail="Invalid admin token")
 
 
+def _check_bot404(x_admin_token: str = Header(default="")):
+    # Принимаем JWT либо legacy global-токены. Пускает любую JWT-роль (viewer/member/admin/root).
+    if not x_admin_token:
+        raise HTTPException(status_code=401, detail="Missing X-Admin-Token")
+    claims = _decode_jwt(x_admin_token)
+    if claims:
+        return  # JWT валиден
+    if (settings.admin_token and _secrets_mod.compare_digest(x_admin_token, settings.admin_token)) \
+       or (settings.bot404_token and _secrets_mod.compare_digest(x_admin_token, settings.bot404_token)):
+        return  # Legacy токен
+    raise HTTPException(status_code=401, detail="Invalid admin token")
+
+
+def _check_bot404_admin(x_admin_token: str = Header(default="")):
+    """Как _check_bot404, но только для write-операций: role in ('admin','root') или legacy env-токены.
+    viewer/member получат 403."""
+    if not x_admin_token:
+        raise HTTPException(status_code=401, detail="Missing X-Admin-Token")
+    claims = _decode_jwt(x_admin_token)
+    if claims:
+        role = claims.get("role", "viewer")
+        if role in ("admin", "root"):
+            return
+        raise HTTPException(status_code=403, detail="Admin role required")
+    if (settings.admin_token and _secrets_mod.compare_digest(x_admin_token, settings.admin_token)) \
+       or (settings.bot404_token and _secrets_mod.compare_digest(x_admin_token, settings.bot404_token)):
+        return  # Legacy env-токены = root
+    raise HTTPException(status_code=401, detail="Invalid admin token")
+
+
 def _check_internal(x_internal_secret: str = Header(default="")):
     if not _INTERNAL_SECRET:
         raise HTTPException(status_code=503, detail="INTERNAL_API_SECRET not configured")
@@ -201,6 +251,22 @@ if _widget_dir.exists():
     app.include_router(skills_router)
 
 app.mount("/widget", StaticFiles(directory=str(_widget_dir)), name="widget")
+
+# PRM iframe SSO — модуль встраивания ЛК Дирижёра в PRM-платформы партнёров.
+# См. prm_iframe.py и supabase/prm_iframe_sso.sql.
+try:
+    from prm_iframe import (
+        router as _prm_router,
+        embed_router as _prm_embed_router,
+        whoami_router as _prm_whoami_router,
+        prm_csp_middleware as _prm_csp_middleware,
+    )
+    app.include_router(_prm_router)
+    app.include_router(_prm_embed_router)
+    app.include_router(_prm_whoami_router)
+    app.middleware("http")(_prm_csp_middleware)
+except Exception as _e:
+    print(f"[prm-iframe] not loaded: {_e}")
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
 
@@ -266,18 +332,18 @@ async def chat(req: ChatRequest):
     )
 
 
-@app.get("/history/{session_id}", response_model=list[HistoryMessage])
+@app.get("/history/{session_id}", response_model=list[HistoryMessage], dependencies=[Depends(_check_bot404)])
 async def get_history(session_id: str):
-    """Возвращает историю диалога для указанной сессии."""
+    """Возвращает историю диалога для указанной сессии. Требует X-Admin-Token (JWT либо legacy)."""
     history = await _memory.get_history(session_id)
     if not history:
         raise HTTPException(status_code=404, detail="Session not found or empty")
     return [HistoryMessage(**msg) for msg in history]
 
 
-@app.delete("/history/{session_id}")
+@app.delete("/history/{session_id}", dependencies=[Depends(_check_bot404_admin)])
 async def clear_history(session_id: str):
-    """Очищает историю диалога для сессии."""
+    """Очищает историю диалога для сессии. Только admin/root."""
     await _memory.clear_session(session_id)
     return {"message": f"History cleared for session {session_id}"}
 
@@ -315,22 +381,79 @@ async def ingest_knowledge(req: IngestRequest):
     }
 
 
+_STARTED_AT = None  # заполнится на первом обращении к /health
+
+
 @app.get("/health")
-async def health():
-    """Проверка состояния системы."""
-    store = VectorStore()
-    sessions = await _memory.get_all_sessions()
-    return {
-        "status": "ok",
-        "knowledge_base_docs": store.count(),
-        "active_sessions": len(sessions),
-        "company": settings.company_name,
-        "models": {
-            "router": settings.router_model,
-            "agent": settings.agent_model,
-            "orchestrator": settings.orchestrator_model,
-        },
-    }
+async def health(deep: bool = False):
+    """
+    Быстрый health-check для uptime-мониторинга.
+    ?deep=1 — расширенный (БД, Redis, KB, тенанты). Возвращает 503 при сбое.
+    """
+    import datetime as _dtmod, time as _time
+    global _STARTED_AT
+    if _STARTED_AT is None:
+        _STARTED_AT = _dtmod.datetime.utcnow()
+
+    result = {"status": "ok", "ts": _dtmod.datetime.utcnow().isoformat() + "Z"}
+    checks = {}
+    problems = []
+
+    # 1) БД — быстрый SELECT 1
+    try:
+        t0 = _time.perf_counter()
+        pool = await _b404_pool()
+        async with pool.acquire() as con:
+            await con.fetchval("SELECT 1")
+        checks["db"] = {"ok": True, "ms": round((_time.perf_counter() - t0) * 1000, 1)}
+    except Exception as e:
+        checks["db"] = {"ok": False, "error": str(e)[:200]}
+        problems.append("db")
+
+    # 2) Redis — ping
+    try:
+        t0 = _time.perf_counter()
+        r = await _get_redis()
+        if r:
+            await r.ping()
+            checks["redis"] = {"ok": True, "ms": round((_time.perf_counter() - t0) * 1000, 1)}
+        else:
+            checks["redis"] = {"ok": False, "error": "client not initialised"}
+            problems.append("redis")
+    except Exception as e:
+        checks["redis"] = {"ok": False, "error": str(e)[:200]}
+        problems.append("redis")
+
+    result["checks"] = checks
+    result["uptime_s"] = int((_dtmod.datetime.utcnow() - _STARTED_AT).total_seconds())
+
+    if deep:
+        try:
+            store = VectorStore()
+            sessions = await _memory.get_all_sessions()
+            result["knowledge_base_docs"] = store.count()
+            result["active_sessions"] = len(sessions)
+            result["company"] = settings.company_name
+            result["models"] = {
+                "router": settings.router_model,
+                "agent": settings.agent_model,
+                "orchestrator": settings.orchestrator_model,
+            }
+            # число тенантов
+            try:
+                pool = await _b404_pool()
+                async with pool.acquire() as con:
+                    result["tenants"] = await con.fetchval("SELECT COUNT(*) FROM tenants WHERE enabled=true")
+            except Exception:
+                pass
+        except Exception as e:
+            result["deep_error"] = str(e)[:200]
+
+    if problems:
+        result["status"] = "degraded"
+        # 503 — чтобы uptime-мониторинг сработал
+        return JSONResponse(content=result, status_code=503)
+    return result
 
 
 # ── Admin Panel ──────────────────────────────────────────────────────────────
@@ -352,19 +475,6 @@ def _accounts():
 class _LoginBody(_BaseModel):
     login: str
     password: str
-
-
-def _check_bot404(x_admin_token: str = Header(default="")):
-    # Принимаем JWT либо legacy global-токены
-    if not x_admin_token:
-        raise HTTPException(status_code=401, detail="Missing X-Admin-Token")
-    claims = _decode_jwt(x_admin_token)
-    if claims:
-        return  # JWT валиден
-    if (settings.admin_token and _secrets_mod.compare_digest(x_admin_token, settings.admin_token)) \
-       or (settings.bot404_token and _secrets_mod.compare_digest(x_admin_token, settings.bot404_token)):
-        return  # Legacy токен
-    raise HTTPException(status_code=401, detail="Invalid admin token")
 
 
 async def _tenant_id_from_token(x_admin_token: str) -> int | None:
@@ -466,7 +576,7 @@ class _AddUserBody(_BaseModel):
     role: str = "member"
 
 
-@app.post("/admin/api/team", dependencies=[Depends(_check_bot404)])
+@app.post("/admin/api/team", dependencies=[Depends(_check_bot404_admin)])
 async def team_add(body: _AddUserBody, x_admin_token: str = Header(default="")):
     import bcrypt as _bcrypt
     if not body.email or not body.password or len(body.password) < 8:
@@ -487,11 +597,11 @@ async def team_add(body: _AddUserBody, x_admin_token: str = Header(default="")):
         if "duplicate" in str(e).lower():
             raise HTTPException(status_code=409, detail="Такой email уже есть в команде")
         raise
-    await _audit("team.add", {"id": uid, "email": body.email, "role": body.role})
+    await _audit("team.add", {"id": uid, "email": body.email, "role": body.role}, tid=tid)
     return {"ok": True, "id": uid}
 
 
-@app.delete("/admin/api/team/{user_id}", dependencies=[Depends(_check_bot404)])
+@app.delete("/admin/api/team/{user_id}", dependencies=[Depends(_check_bot404_admin)])
 async def team_delete(user_id: int, x_admin_token: str = Header(default="")):
     pool = await _b404_pool()
     tid = await _tenant_id_from_token(x_admin_token)
@@ -503,7 +613,7 @@ async def team_delete(user_id: int, x_admin_token: str = Header(default="")):
     )
     if not deleted:
         raise HTTPException(status_code=404, detail="not found or protected")
-    await _audit("team.delete", {"id": user_id})
+    await _audit("team.delete", {"id": user_id}, tid=tid)
     return {"ok": True}
 
 
@@ -875,12 +985,20 @@ async def bot404_stats(x_admin_token: str = Header(default="")):
     total = await pool.fetchval("SELECT count(*) FROM bot_404_log WHERE tenant_id=$1", tid) or 0
     last24 = await pool.fetchval("SELECT count(*) FROM bot_404_log WHERE tenant_id=$1 AND created_at > now() - interval '24 hours'", tid) or 0
     leads = await pool.fetchval("SELECT count(*) FROM bot_404_leads WHERE tenant_id=$1", tid) or 0
+    kb_docs = await pool.fetchval("SELECT count(*) FROM knowledge_base WHERE tenant_id=$1", tid) or 0
+    # company — из брендинга тенанта, а не хардкод 404ai (иначе клиент видит вендора в своём кабинете)
+    brand = await pool.fetchval("SELECT brand_name FROM v_tenant_branding WHERE tenant_id=$1", tid) or ""
+    bot_nm = await pool.fetchval("SELECT bot_name FROM v_tenant_branding WHERE tenant_id=$1", tid) or ""
+    company = (str(brand) + (" · " + str(bot_nm) if bot_nm else "")).strip(" ·") or "—"
+    # модель — эффективная модель тенанта (а не хардкод вендора); эскалации — реальный счётчик
+    tmodel = await pool.fetchval("SELECT model FROM v_tenant_effective_limits WHERE tenant_id=$1", tid) or "gemini-2.5-flash-lite"
+    escalated = await pool.fetchval("SELECT count(*) FROM session_meta WHERE tenant_id=$1 AND escalated", tid) or 0
     return {
-        "stats": {"status": "online", "active_sessions": sessions, "knowledge_base_docs": 0,
-                  "models": {"agent": "gemini-2.5-flash-lite", "router": "gemini-2.5-flash (критик)", "orchestrator": "gemini-2.5-flash"},
-                  "company": "404ai · Аиша"},
+        "stats": {"status": "online", "active_sessions": sessions, "knowledge_base_docs": kb_docs,
+                  "models": {"agent": tmodel, "router": tmodel, "orchestrator": tmodel},
+                  "company": company},
         "extStats": {"total_sessions": sessions, "total_messages": total, "messages_24h": last24,
-                     "qualified_leads": leads, "escalated": 0, "temperature": {"hot": 0, "warm": 0, "cold": 0}, "intents": []},
+                     "qualified_leads": leads, "escalated": escalated, "temperature": {"hot": 0, "warm": 0, "cold": 0}, "intents": []},
     }
 
 
@@ -913,7 +1031,7 @@ async def admin_sessions(x_admin_token: str = Header(default="")):
     return [{"session_id": r["session_id"], "message_count": r["message_count"]} for r in rows]
 
 
-@app.post("/admin/api/knowledge/upload", dependencies=[Depends(_check_bot404)])
+@app.post("/admin/api/knowledge/upload", dependencies=[Depends(_check_bot404_admin)])
 async def upload_knowledge(file: UploadFile = File(...), x_admin_token: str = Header(default="")):
     """Загрузить JSON файл базы знаний — статьи прикрепляются к ТЕКУЩЕМУ ТЕНАНТУ."""
     tid = await _tenant_id_from_token(x_admin_token)
@@ -934,7 +1052,10 @@ async def upload_knowledge(file: UploadFile = File(...), x_admin_token: str = He
     conn = _kb_conn(); conn.autocommit = True
     inserted = 0
     for item in data:
-        doc_id = str(item.get("id") or f"upload-{tid}-{inserted}")
+        # Изоляция тенантов: id — глобальный текстовый PK. Без префикса одинаковый
+        # item.id у двух тенантов (напр. "about_001") затрёт чужую статью через ON CONFLICT.
+        raw_id = str(item.get("id") or f"upload-{tid}-{inserted}")
+        doc_id = raw_id if raw_id.startswith(f"{tid}::") else f"{tid}::{raw_id}"
         text = item.get("content") or item.get("text") or ""
         if not text: continue
         emb_resp = client.embeddings.create(model=_os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small"), input=text)
@@ -946,7 +1067,8 @@ async def upload_knowledge(file: UploadFile = File(...), x_admin_token: str = He
                    ON CONFLICT (id) DO UPDATE SET
                      content=EXCLUDED.content, embedding=EXCLUDED.embedding,
                      category=EXCLUDED.category, title=EXCLUDED.title, source=EXCLUDED.source,
-                     tenant_id=EXCLUDED.tenant_id, updated_at=now()""",
+                     tenant_id=EXCLUDED.tenant_id, updated_at=now()
+                   WHERE knowledge_base.tenant_id = EXCLUDED.tenant_id""",
                 (doc_id, text, emb, item.get("category"), item.get("title"), item.get("source"), tid),
             )
         inserted += 1
@@ -960,7 +1082,9 @@ async def list_knowledge(category: str | None = None, search: str | None = None,
     from knowledge.vector_store import _get_conn as _kb_conn
     import psycopg2.extras as _pgx
     conn = _kb_conn()
-    conditions = ["(tenant_id = %s OR tenant_id IS NULL)"]
+    # Изоляция тенантов: показываем ТОЛЬКО статьи своего тенанта (как и search_knowledge).
+    # Раньше был "OR tenant_id IS NULL" — легаси-строки без владельца светились бы всем.
+    conditions = ["tenant_id = %s"]
     params = [tid]
     if category:
         conditions.append("category = %s"); params.append(category)
@@ -978,7 +1102,7 @@ async def list_knowledge(category: str | None = None, search: str | None = None,
     return [dict(r) for r in rows]
 
 
-@app.delete("/admin/api/knowledge", dependencies=[Depends(_check_bot404)])
+@app.delete("/admin/api/knowledge", dependencies=[Depends(_check_bot404_admin)])
 async def clear_knowledge(x_admin_token: str = Header(default="")):
     """Очистить базу знаний ТЕКУЩЕГО ТЕНАНТА (статьи без tenant_id остаются)."""
     tid = await _tenant_id_from_token(x_admin_token)
@@ -1035,7 +1159,7 @@ async def proactive_accounts(x_admin_token: str = Header(default="")):
     return await tg_client.get_accounts_status(tid)
 
 
-@app.post("/admin/api/proactive/accounts/request-code", dependencies=[Depends(_check_bot404)])
+@app.post("/admin/api/proactive/accounts/request-code", dependencies=[Depends(_check_bot404_admin)])
 async def proactive_request_code(req: TgCodeRequest):
     try:
         result = await tg_client.request_code(req.phone)
@@ -1044,7 +1168,7 @@ async def proactive_request_code(req: TgCodeRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.post("/admin/api/proactive/accounts/confirm-code", dependencies=[Depends(_check_bot404)])
+@app.post("/admin/api/proactive/accounts/confirm-code", dependencies=[Depends(_check_bot404_admin)])
 async def proactive_confirm_code(req: TgConfirmRequest, x_admin_token: str = Header(default="")):
     try:
         tid = await _tenant_id_from_token(x_admin_token)
@@ -1054,13 +1178,45 @@ async def proactive_confirm_code(req: TgConfirmRequest, x_admin_token: str = Hea
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.delete("/admin/api/proactive/accounts/{account_id}", dependencies=[Depends(_check_bot404_admin)])
+async def proactive_delete_account(account_id: int, x_admin_token: str = Header(default="")):
+    """Удаляет TG-аккаунт из проактивности: останавливает MTProto-клиент,
+    удаляет запись из tg_accounts. Кампании с этим account_id остаются, но
+    рассылка/приём через этот аккаунт больше невозможны (FK в campaigns).
+    """
+    tid = await _tenant_id_from_token(x_admin_token)
+    if tid is None:
+        raise HTTPException(status_code=404, detail="tenant not found")
+    pool = await _b404_pool()
+    row = await pool.fetchrow(
+        "SELECT id, phone, tenant_id FROM tg_accounts WHERE id=$1", account_id,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="account not found")
+    if int(row["tenant_id"]) != int(tid):
+        raise HTTPException(status_code=403, detail="not your account")
+    phone = row["phone"]
+    # Останавливаем MTProto клиент (best-effort)
+    try:
+        await tg_client.stop_client(phone)
+    except Exception as e:
+        print(f"[proactive.delete] stop_client fail: {e}")
+    # Есть ли кампании с этим аккаунтом? Если да — не даём удалить, надо сначала снести кампании
+    used = await pool.fetchval("SELECT count(*) FROM campaigns WHERE account_id=$1", account_id)
+    if used and used > 0:
+        raise HTTPException(status_code=409, detail=f"У аккаунта {used} привязанных кампаний — сначала удалите их")
+    await pool.execute("DELETE FROM tg_accounts WHERE id=$1", account_id)
+    await _audit("proactive.account.delete", {"account_id": account_id, "phone": phone}, tid=tid)
+    return {"ok": True}
+
+
 @app.get("/admin/api/proactive/campaigns", dependencies=[Depends(_check_bot404)])
 async def proactive_list_campaigns(x_admin_token: str = Header(default="")):
     tid = await _tenant_id_from_token(x_admin_token)
     return await campaign_manager.list_campaigns(tid)
 
 
-@app.post("/admin/api/proactive/campaigns", dependencies=[Depends(_check_bot404)])
+@app.post("/admin/api/proactive/campaigns", dependencies=[Depends(_check_bot404_admin)])
 async def proactive_create_campaign(req: CampaignCreate, x_admin_token: str = Header(default="")):
     tid = await _tenant_id_from_token(x_admin_token)
     try:
@@ -1069,7 +1225,7 @@ async def proactive_create_campaign(req: CampaignCreate, x_admin_token: str = He
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.delete("/admin/api/proactive/campaigns/{campaign_id}", dependencies=[Depends(_check_bot404)])
+@app.delete("/admin/api/proactive/campaigns/{campaign_id}", dependencies=[Depends(_check_bot404_admin)])
 async def proactive_delete_campaign(campaign_id: int, x_admin_token: str = Header(default="")):
     tid = await _tenant_id_from_token(x_admin_token)
     await campaign_manager.delete_campaign(campaign_id, tid)
@@ -1129,6 +1285,109 @@ async def proactive_conversations(x_admin_token: str = Header(default=""), campa
 async def proactive_conversation_messages(contact_id: int, x_admin_token: str = Header(default="")):
     tid = await _tenant_id_from_token(x_admin_token)
     return await campaign_manager.get_conversation_messages(contact_id, tid)
+
+
+class _ProTakeoverBody(_BaseModel):
+    enabled: bool
+
+
+@app.post("/admin/api/proactive/conversations/{contact_id}/takeover", dependencies=[Depends(_check_bot404)])
+async def proactive_takeover(contact_id: int, body: _ProTakeoverBody, x_admin_token: str = Header(default="")):
+    """Оператор берёт/отдаёт управление проактивным диалогом.
+
+    session_id формат `proactive-tg:{contact_id}` — тот же, что использует
+    campaign_manager.handle_incoming. При enabled=true бот молчит на входящие,
+    ответы уходят через /admin/api/proactive/conversations/{contact_id}/reply.
+    """
+    tid = await _tenant_id_from_token(x_admin_token)
+    if tid is None:
+        raise HTTPException(status_code=404, detail="tenant not found")
+    pool = await _b404_pool()
+    # Проверяем что contact_id принадлежит этому тенанту (через campaign),
+    # заодно достаём фактический session_id — тот же, который использует
+    # campaign_manager.handle_incoming (contact.session_id — UUID первой рассылки
+    # или proactive-tg:{id} fallback). Иначе takeover пишется в session_meta по
+    # одному ключу, а /api/sales-chat читает по другому — бот не молчит.
+    row = await pool.fetchrow(
+        "SELECT c.tenant_id, cc.session_id FROM campaign_contacts cc JOIN campaigns c ON c.id = cc.campaign_id WHERE cc.id=$1",
+        contact_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="contact not found")
+    if int(row["tenant_id"]) != int(tid):
+        raise HTTPException(status_code=403, detail="not your contact")
+    sid = row["session_id"] or f"proactive-tg:{contact_id}"
+    await pool.execute(
+        """INSERT INTO session_meta (session_id, tenant_id, human_takeover)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (session_id) DO UPDATE SET human_takeover = EXCLUDED.human_takeover""",
+        sid, tid, body.enabled,
+    )
+    await _audit("proactive.takeover", {"contact_id": contact_id, "enabled": body.enabled}, tid=tid)
+    return {"ok": True, "session_id": sid, "human_takeover": body.enabled}
+
+
+class _ProReplyBody(_BaseModel):
+    text: str
+
+
+@app.post("/admin/api/proactive/conversations/{contact_id}/reply", dependencies=[Depends(_check_bot404)])
+async def proactive_manual_reply(contact_id: int, body: _ProReplyBody, x_admin_token: str = Header(default="")):
+    """Оператор отправляет сообщение из ЛК в user-mode Telegram-диалог.
+
+    Использует tg_client.send_message с phone аккаунта кампании и tg_user_id
+    контакта. Пишет в outreach_messages direction='out' — сообщение появится
+    во вкладке «Диалоги» (proactive) как ответ оператора.
+    """
+    text = (body.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text required")
+    if len(text) > 4000:
+        text = text[:4000]
+
+    tid = await _tenant_id_from_token(x_admin_token)
+    if tid is None:
+        raise HTTPException(status_code=404, detail="tenant not found")
+
+    pool = await _b404_pool()
+    contact = await pool.fetchrow(
+        """SELECT cc.tg_user_id, cc.username, cc.session_id, c.tenant_id, a.phone
+             FROM campaign_contacts cc
+             JOIN campaigns    c ON c.id = cc.campaign_id
+             JOIN tg_accounts  a ON a.id = c.account_id
+            WHERE cc.id = $1""",
+        contact_id,
+    )
+    if not contact:
+        raise HTTPException(status_code=404, detail="contact not found")
+    if int(contact["tenant_id"]) != int(tid):
+        raise HTTPException(status_code=403, detail="not your contact")
+    if not contact["tg_user_id"]:
+        raise HTTPException(status_code=400, detail="no tg_user_id on contact — reply не поддерживается пока клиент не написал первым")
+
+    # Отправляем через user-mode Telegram
+    from proactive import tg_client as _tgc
+    try:
+        await _tgc.send_message(contact["phone"], int(contact["tg_user_id"]), text)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"tg send fail: {e}")
+
+    # Логируем в БД:
+    #   - outreach_messages — для UI-диалога «Проактивность → Диалоги»
+    #   - bot_404_log — КРИТИЧНО: контекст, который читает бот в /api/sales-chat при
+    #     генерации ответа. Без этой записи вернувший управление боту клиент получит
+    #     ответ так, как будто оператор не писал ничего — контекст потеряется.
+    sid = contact["session_id"] or f"proactive-tg:{contact_id}"
+    await pool.execute(
+        "INSERT INTO outreach_messages (contact_id, direction, content) VALUES ($1,'out',$2)",
+        contact_id, text,
+    )
+    await pool.execute(
+        "INSERT INTO bot_404_log(session_id,direction,text,tenant_id) VALUES($1,'out',$2,$3)",
+        sid, text, tid,
+    )
+    await _audit("proactive.reply", {"contact_id": contact_id, "len": len(text)}, tid=tid)
+    return {"ok": True}
 
 
 # ── Универсальный поиск для Cmd+K палитры ─────────────────────────────────────
@@ -1247,10 +1506,16 @@ _TENANT_SLUG = "aisha"  # hardcoded scope для acc404_login (в будущем
 
 
 # ── Phase 5: audit log helper ────────────────────────────────────────────────
-async def _audit(action: str, payload: dict | None, slug: str = "aisha", actor_email: str = "tenant"):
+async def _audit(action: str, payload: dict | None, slug: str | None = None, actor_email: str = "tenant", tid: int | None = None):
     try:
         pool = await _b404_pool()
-        tid = await pool.fetchval("SELECT id FROM tenants WHERE slug=$1", slug)
+        # Изоляция тенантов: пишем в аудит-лог ИМЕННО того тенанта, кто совершил действие.
+        # Раньше при отсутствии slug дефолт был "aisha" → чужие действия (team/branding/tg_bot)
+        # писались в аудит Аиши и светились в её ЛК. Теперь: есть tid — берём его; иначе slug; иначе не пишем.
+        if tid is None:
+            if not slug:
+                return
+            tid = await pool.fetchval("SELECT id FROM tenants WHERE slug=$1", slug)
         if tid is None:
             return
         import json as _json
@@ -1305,7 +1570,7 @@ class _BrandingBody(_BaseModel):
     position: str | None = None
 
 
-@app.post("/admin/api/branding", dependencies=[Depends(_check_bot404)])
+@app.post("/admin/api/branding", dependencies=[Depends(_check_bot404_admin)])
 async def set_branding(body: _BrandingBody, x_admin_token: str = Header(default="")):
     pool = await _b404_pool()
     tid = await _tenant_id_from_token(x_admin_token)
@@ -1332,7 +1597,7 @@ async def set_branding(body: _BrandingBody, x_admin_token: str = Header(default=
     sets.append("updated_at=now()")
     params.append(tid)
     await pool.execute(f"UPDATE tenant_branding SET {', '.join(sets)} WHERE tenant_id=${i}", *params)
-    await _audit("branding.update", {k: v for k, v in data.items() if v is not None})
+    await _audit("branding.update", {k: v for k, v in data.items() if v is not None}, tid=tid)
     return {"ok": True}
 
 
@@ -1404,7 +1669,7 @@ class _TgBotBody(_BaseModel):
     bot_token: str
 
 
-@app.post("/admin/api/tg-bots", dependencies=[Depends(_check_bot404)])
+@app.post("/admin/api/tg-bots", dependencies=[Depends(_check_bot404_admin)])
 async def add_tg_bot(body: _TgBotBody, x_admin_token: str = Header(default="")):
     token = body.bot_token.strip()
     if not _re.match(r"^\d+:[A-Za-z0-9_-]{30,}$", token):
@@ -1446,7 +1711,7 @@ async def add_tg_bot(body: _TgBotBody, x_admin_token: str = Header(default="")):
                VALUES($1, $2, $3, $4, true) RETURNING id""",
             tid_row["id"], token, me.get("id"), ("@" + me["username"]) if me.get("username") else None,
         )
-    await _audit("tg_bot.add", {"id": bot_id, "username": me.get("username")})
+    await _audit("tg_bot.add", {"id": bot_id, "username": me.get("username")}, tid=tid)
     await _publish_change("tg-bots-changed")
     return {"ok": True, "id": bot_id, "bot_username": ("@" + me["username"]) if me.get("username") else None,
             "hot_reload": True}
@@ -1463,7 +1728,7 @@ async def toggle_tg_bot(bot_id: int, x_admin_token: str = Header(default="")):
     )
     if new_state is None:
         raise HTTPException(status_code=404, detail="bot not found")
-    await _audit("tg_bot.toggle", {"id": bot_id, "enabled": new_state})
+    await _audit("tg_bot.toggle", {"id": bot_id, "enabled": new_state}, tid=tid)
     await _publish_change("tg-bots-changed")
     return {"ok": True, "enabled": new_state, "hot_reload": True}
 
@@ -1478,7 +1743,7 @@ async def delete_tg_bot(bot_id: int, x_admin_token: str = Header(default="")):
     )
     if not deleted:
         raise HTTPException(status_code=404, detail="bot not found")
-    await _audit("tg_bot.delete", {"id": bot_id})
+    await _audit("tg_bot.delete", {"id": bot_id}, tid=tid)
     await _publish_change("tg-bots-changed")
     return {"ok": True, "hot_reload": True}
 
@@ -1907,13 +2172,15 @@ class _PartnerRegisterBody(BaseModel):
     contact_type: str = "telegram"
     session_id: str | None = None
     source: str | None = None  # 'tg-bot' | 'widget'
+    tenant_slug: str | None = None  # тенант бота; дефолт aisha (единственный с партнёркой)
 
 
 @app.post("/internal/partner-register", dependencies=[Depends(_check_internal)])
 async def internal_partner_register(body: _PartnerRegisterBody):
     """Создаёт заявку партнёра со status='pending'. Если контакт уже есть — возвращает существующего."""
     pool = await _b404_pool()
-    tid = await _tenant_id_from_token(x_admin_token)
+    # internal-эндпоинт без admin-токена: тенант берём из body (дефолт aisha), НЕ из несуществующего x_admin_token
+    tid = await pool.fetchval("SELECT id FROM tenants WHERE slug=$1", body.tenant_slug or "aisha")
     existing = await pool.fetchrow(
         "SELECT id, status FROM bot_404_partners WHERE tenant_id=$1 AND lower(contact)=lower($2) LIMIT 1",
         tid, body.contact,
@@ -1969,6 +2236,7 @@ async def internal_partner_stats(
     contact: str | None = None,
     session_id: str | None = None,
     message: str | None = None,
+    tenant_slug: str = "aisha",
 ):
     """Идентификация партнёра + его статистика. Зовёт bot-server по docker network.
     Параметры (любая комбинация):
@@ -1997,16 +2265,16 @@ async def internal_partner_stats(
             u = None
         return ("@" + str(u).lower(), "tg-session") if u else None
 
-    def get_partner_stats(contact_val):
+    def get_partner_stats(contact_val, p_tid):
         try:
             conn = _kb_conn()
             with conn.cursor(cursor_factory=_pg_extras.RealDictCursor) as cur:
                 cur.execute("""SELECT id, name, contact, rate_pct::float AS rate_pct, status, joined_at, referral_code
-                               FROM bot_404_partners WHERE lower(contact)=lower(%s) LIMIT 1""", (contact_val,))
+                               FROM bot_404_partners WHERE lower(contact)=lower(%s) AND tenant_id=%s LIMIT 1""", (contact_val, p_tid))
                 p = cur.fetchone()
                 if not p: return None
                 cur.execute("""SELECT lead_name, status, reward_rub::float AS reward_rub, payout_status, created_at
-                               FROM bot_404_partner_leads WHERE partner_id=%s ORDER BY created_at DESC LIMIT 50""", (p["id"],))
+                               FROM bot_404_partner_leads WHERE partner_id=%s AND tenant_id=%s ORDER BY created_at DESC LIMIT 50""", (p["id"], p_tid))
                 leads = [dict(r) for r in cur.fetchall()]
         except Exception as e:
             print(f"[partner-stats] db failed: {e}"); return None
@@ -2032,7 +2300,18 @@ async def internal_partner_stats(
             resolved_contact, source = r
     if not resolved_contact:
         return {"found": False, "reason": "contact_not_resolved"}
-    stats = get_partner_stats(resolved_contact)
+    # tenant бота (дефолт aisha): партнёра ищем ТОЛЬКО в пределах этого тенанта (изоляция)
+    _p_tid = None
+    try:
+        _c = _kb_conn()
+        with _c.cursor() as _cur:
+            _cur.execute("SELECT id FROM tenants WHERE slug=%s", (tenant_slug,)); _r = _cur.fetchone()
+            _p_tid = _r[0] if _r else None
+    except Exception:
+        _p_tid = None
+    if _p_tid is None:
+        return {"found": False, "reason": "tenant_not_resolved"}
+    stats = get_partner_stats(resolved_contact, _p_tid)
     if not stats:
         return {"found": False, "reason": "not_a_partner", "contact": resolved_contact, "source": source}
     return {"found": True, "contact": resolved_contact, "source": source, **stats}
