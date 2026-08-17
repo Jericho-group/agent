@@ -23,16 +23,13 @@ services:
     container_name: chatbot_app
     restart: unless-stopped
     env_file: .env
-    environment:
-      SUPABASE_DB_URL: postgresql://chatbot_user:${POSTGRES_PASSWORD:-chatbotpw}@postgres:5432/chatbot_db
     expose:
       - "8000"
-    depends_on:
-      postgres:
-        condition: service_healthy
     volumes:
       - ./data:/app/data
       - ./admin:/app/admin
+    networks:
+      - chatbot_prod
 
   caddy:
     image: caddy:2-alpine
@@ -47,8 +44,14 @@ services:
       - caddy_config:/config
     depends_on:
       - chatbot
+    networks:
+      - chatbot_prod
+
+networks:
+  chatbot_prod:
+    name: chatbot_prod_default
+    external: true
 
 volumes:
-  postgres_data:
   caddy_data:
   caddy_config:
