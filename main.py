@@ -52,6 +52,27 @@ async def lifespan(app: FastAPI):
     import asyncio as _asyncio
     _asyncio.create_task(tg_client.load_active_accounts())
     print("[startup] Proactive TG module scheduled (background)")
+
+    # PRM v1.1: retention worker — раз в час чистит устаревшие события/сессии/soft-deleted
+    async def _prm_retention_loop():
+        while True:
+            try:
+                pool = await _b404_pool()
+                # 30 дней hot-storage для events
+                d1 = await pool.execute("DELETE FROM integration_events WHERE created_at < now() - interval '30 days'")
+                # embed-сессии старше 7 дней после expire
+                d2 = await pool.execute("DELETE FROM embed_sessions WHERE expires_at < now() - interval '7 days'")
+                # завершённые async-джобы старше 7 дней
+                d3 = await pool.execute("DELETE FROM async_jobs WHERE updated_at < now() - interval '7 days' AND status IN ('done','failed')")
+                # физическое удаление тенантов, у которых прошёл retention
+                d4 = await pool.execute("DELETE FROM tenants WHERE status='pending_deletion' AND delete_scheduled_at IS NOT NULL AND delete_scheduled_at < now()")
+                if any(int(x.split()[-1]) for x in (d1, d2, d3, d4) if x and x.split()[-1].isdigit()):
+                    print(f"[prm-retention] events={d1} sessions={d2} jobs={d3} tenants={d4}")
+            except Exception as e:
+                print(f"[prm-retention] err: {e}")
+            await _asyncio.sleep(3600)  # раз в час
+    _asyncio.create_task(_prm_retention_loop())
+    print("[startup] PRM retention worker scheduled (background, hourly)")
     yield
 
 
@@ -1599,6 +1620,1282 @@ async def set_branding(body: _BrandingBody, x_admin_token: str = Header(default=
     await pool.execute(f"UPDATE tenant_branding SET {', '.join(sets)} WHERE tenant_id=${i}", *params)
     await _audit("branding.update", {k: v for k, v in data.items() if v is not None}, tid=tid)
     return {"ok": True}
+
+
+# ── Расписание бота в Avito (per-tenant, JSONB в tenant_integrations.avito_schedule) ────
+import datetime as _dt_sched
+_SCHED_WEEKDAYS = ('mon','tue','wed','thu','fri','sat','sun')
+
+def _sched_valid_time(s):
+    if not isinstance(s, str): return False
+    parts = s.split(':')
+    if len(parts) != 2: return False
+    try: h, m = int(parts[0]), int(parts[1])
+    except ValueError: return False
+    return 0 <= h <= 24 and 0 <= m <= 59
+
+def _sched_valid_spec(spec):
+    if not isinstance(spec, dict): return False, "spec must be object"
+    if spec.get('always_active') or spec.get('always_off'): return True, None
+    wins = spec.get('windows', [])
+    if not isinstance(wins, list): return False, "windows must be array"
+    for w in wins:
+        if not isinstance(w, dict) or not _sched_valid_time(w.get('from')) or not _sched_valid_time(w.get('to')):
+            return False, "window must be {from:'HH:MM', to:'HH:MM'}"
+        fh, fm = map(int, w['from'].split(':'))
+        th, tm = map(int, w['to'].split(':'))
+        if fh*60+fm >= th*60+tm:
+            return False, f"window '{w['from']}-{w['to']}' invalid: 'from' must be < 'to'"
+    return True, None
+
+def _sched_validate(sched):
+    if sched is None: return True, None
+    if not isinstance(sched, dict): return False, "schedule must be object or null"
+    weekly = sched.get('weekly', {})
+    if not isinstance(weekly, dict): return False, "weekly must be object"
+    for dow, spec in weekly.items():
+        if dow not in _SCHED_WEEKDAYS: return False, f"invalid weekday: {dow}"
+        ok, err = _sched_valid_spec(spec)
+        if not ok: return False, f"weekly.{dow}: {err}"
+    overrides = sched.get('overrides', [])
+    if not isinstance(overrides, list): return False, "overrides must be array"
+    for i, o in enumerate(overrides):
+        if not isinstance(o, dict): return False, f"overrides[{i}] must be object"
+        try: _dt_sched.date.fromisoformat(o.get('date', ''))
+        except ValueError: return False, f"overrides[{i}].date must be YYYY-MM-DD"
+        ok, err = _sched_valid_spec(o)
+        if not ok: return False, f"overrides[{i}]: {err}"
+    return True, None
+
+def _sched_spec_matches(spec, minutes):
+    if not spec: return False
+    if spec.get('always_active'): return True
+    if spec.get('always_off'): return False
+    for w in spec.get('windows', []):
+        fh, fm = map(int, w['from'].split(':'))
+        th, tm = map(int, w['to'].split(':'))
+        f, t = fh*60+fm, th*60+tm
+        if f < t and f <= minutes < t: return True
+    return False
+
+def _sched_evaluate_now(schedule):
+    if not schedule: return {'active': True, 'source': 'no_schedule_default_on'}
+    now_utc = _dt_sched.datetime.utcnow()
+    msk = now_utc + _dt_sched.timedelta(hours=3)
+    date_iso = msk.date().isoformat()
+    dow = _SCHED_WEEKDAYS[msk.weekday()]
+    minutes = msk.hour*60 + msk.minute
+    todays_override = next((o for o in schedule.get('overrides', []) if o.get('date') == date_iso), None)
+    spec = todays_override or schedule.get('weekly', {}).get(dow)
+    return {
+        'active': _sched_spec_matches(spec, minutes),
+        'source': 'override' if todays_override else 'weekly',
+        'msk_now': msk.strftime('%Y-%m-%d %H:%M'),
+        'weekday': dow,
+    }
+
+@app.get("/admin/api/avito-schedule", dependencies=[Depends(_check_bot404)])
+async def get_avito_schedule(x_admin_token: str = Header(default="")):
+    pool = await _b404_pool()
+    tid = await _tenant_id_from_token(x_admin_token)
+    if not tid:
+        raise HTTPException(status_code=404, detail="tenant not found")
+    trow = await pool.fetchrow("SELECT slug, name FROM tenants WHERE id=$1", tid)
+    srow = await pool.fetchrow("SELECT avito_schedule FROM tenant_integrations WHERE tenant_id=$1", tid)
+    schedule = srow['avito_schedule'] if srow else None
+    if isinstance(schedule, str):
+        import json as _j
+        try: schedule = _j.loads(schedule)
+        except Exception: schedule = None
+    return {
+        'tenant_slug': trow['slug'] if trow else None,
+        'tenant_name': trow['name'] if trow else None,
+        'schedule': schedule,
+        'status': _sched_evaluate_now(schedule),
+    }
+
+class _AvitoScheduleBody(_BaseModel):
+    schedule: dict | None = None
+
+@app.put("/admin/api/avito-schedule", dependencies=[Depends(_check_bot404_admin)])
+async def put_avito_schedule(body: _AvitoScheduleBody, x_admin_token: str = Header(default="")):
+    pool = await _b404_pool()
+    tid = await _tenant_id_from_token(x_admin_token)
+    if not tid:
+        raise HTTPException(status_code=404, detail="tenant not found")
+    ok, err = _sched_validate(body.schedule)
+    if not ok:
+        raise HTTPException(status_code=400, detail=err)
+    import json as _j
+    await pool.execute("INSERT INTO tenant_integrations(tenant_id) VALUES($1) ON CONFLICT (tenant_id) DO NOTHING", tid)
+    await pool.execute(
+        "UPDATE tenant_integrations SET avito_schedule = $1::jsonb WHERE tenant_id = $2",
+        (_j.dumps(body.schedule) if body.schedule is not None else None),
+        tid,
+    )
+    await _audit("avito_schedule.update", {'schedule': body.schedule}, tid=tid)
+    return {'ok': True, 'status': _sched_evaluate_now(body.schedule)}
+
+
+@app.get("/admin/api/branding", dependencies=[Depends(_check_bot404)])
+async def get_branding(x_admin_token: str = Header(default="")):
+    pool = await _b404_pool()
+    tid = await _tenant_id_from_token(x_admin_token)
+    row = await pool.fetchrow("SELECT * FROM v_tenant_branding WHERE tenant_id=$1", tid)
+    if not row:
+        raise HTTPException(status_code=404, detail="tenant not found")
+    return {"branding": dict(row)}
+
+
+class _BrandingBody(_BaseModel):
+    brand_name: str | None = None
+    bot_name: str | None = None
+    role_subtitle: str | None = None
+    logo_url: str | None = None
+    primary_color: str | None = None
+    accent_color: str | None = None
+    text_color: str | None = None
+    greeting: str | None = None
+    nudge_text: str | None = None
+    chat_title: str | None = None
+    footer_text: str | None = None
+    manager_email: str | None = None
+    position: str | None = None
+
+
+@app.post("/admin/api/branding", dependencies=[Depends(_check_bot404_admin)])
+async def set_branding(body: _BrandingBody, x_admin_token: str = Header(default="")):
+    pool = await _b404_pool()
+    tid = await _tenant_id_from_token(x_admin_token)
+    tid_row = {"id": tid} if tid else None
+    if not tid_row:
+        raise HTTPException(status_code=404, detail="tenant not found")
+    tid = tid_row["id"]
+    await pool.execute("INSERT INTO tenant_branding(tenant_id) VALUES($1) ON CONFLICT (tenant_id) DO NOTHING", tid)
+    cols = ["brand_name","bot_name","role_subtitle","logo_url","primary_color","accent_color","text_color",
+            "greeting","nudge_text","chat_title","footer_text","manager_email","position"]
+    data = body.model_dump(exclude_none=False)
+    sets = []
+    params = []
+    i = 1
+    for c in cols:
+        v = data.get(c, None)
+        if v is None and c not in data:
+            continue
+        sets.append(f"{c}=${i}")
+        params.append(v if v != "" else None)
+        i += 1
+    if not sets:
+        return {"ok": True, "noop": True}
+    sets.append("updated_at=now()")
+    params.append(tid)
+    await pool.execute(f"UPDATE tenant_branding SET {', '.join(sets)} WHERE tenant_id=${i}", *params)
+    await _audit("branding.update", {k: v for k, v in data.items() if v is not None}, tid=tid)
+    return {"ok": True}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PRM v1.1 API — новая модель integrations → tenants → operators/contacts.
+# По ТЗ v1.1 (ответ на 22 замечания PRM Online от 03.07.2026).
+# ═════════════════════════════════════════════════════════════════════════════
+
+import bcrypt as _bcrypt_prm
+import secrets as _secrets_prm
+import datetime as _dt_prm
+
+
+# ── Rate-limits (ТЗ v1.1 § 4.5) ─────────────────────────────────────────────
+# 3-х уровневая защита:
+#   primary   = (integration_id, actor_external_id) : 60/мин  — по актору
+#   secondary = integration_id                       : 600/мин — по интеграции
+#   ip        = client_ip                            : 1000/мин — защитный
+import time as _time_prm
+
+
+async def _prm_check_rate_limit(bucket_key: str, limit_per_min: int) -> tuple[bool, int]:
+    """Sliding window через Redis Sorted Set. Возвращает (allowed, current_count)."""
+    r = await _get_redis()
+    if not r:
+        return (True, 0)  # если Redis недоступен — не блокируем (мягкий fallback)
+    now_ms = int(_time_prm.time() * 1000)
+    window_ms = 60 * 1000
+    key = f"prm:rl:{bucket_key}"
+    try:
+        async with r.pipeline(transaction=False) as pipe:
+            pipe.zremrangebyscore(key, 0, now_ms - window_ms)
+            pipe.zcard(key)
+            pipe.zadd(key, {f"{now_ms}:{_secrets_prm.token_hex(4)}": now_ms})
+            pipe.expire(key, 65)
+            res = await pipe.execute()
+        current = res[1] + 1  # +1 = только что добавленный
+        return (current <= limit_per_min, current)
+    except Exception:
+        return (True, 0)
+
+
+def _prm_client_ip(request: Request) -> str:
+    xff = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    return xff or (request.client.host if request.client else "unknown")
+
+
+# ── аутентификация: Authorization: Bearer <API_CREDENTIAL> ──────────────────
+async def _prm_auth(request: Request) -> dict:
+    """Возвращает { integration_id, integration_name, allowed_origins, status }.
+    Кидает 401 при невалидном credential, 429 при превышении rate-limit.
+    """
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="missing bearer credential")
+    cred = auth[7:].strip()
+    if not cred.startswith("prm_"):
+        raise HTTPException(status_code=401, detail="invalid credential format")
+    pool = await _b404_pool()
+    rows = await pool.fetch(
+        "SELECT id, name, api_credential_hash, api_credential_hash_prev, "
+        "       api_credential_prev_expires_at, allowed_origins, status "
+        "FROM integrations WHERE status='active'"
+    )
+    matched = None
+    for r in rows:
+        # проверяем текущий hash
+        if _bcrypt_prm.checkpw(cred.encode(), r["api_credential_hash"].encode()):
+            matched = r
+            break
+        # проверяем prev hash (переходный период 24ч после ротации)
+        try:
+            prev_hash = r.get("api_credential_hash_prev") if hasattr(r, "get") else None
+            prev_exp = r.get("api_credential_prev_expires_at") if hasattr(r, "get") else None
+        except Exception:
+            prev_hash, prev_exp = None, None
+        if prev_hash and prev_exp:
+            now = _dt_prm.datetime.now(_dt_prm.timezone.utc)
+            if prev_exp > now and _bcrypt_prm.checkpw(cred.encode(), prev_hash.encode()):
+                matched = r
+                break
+    if not matched:
+        raise HTTPException(status_code=401, detail="invalid credential")
+
+    # secondary: integration_id → 600/мин
+    ok, _ = await _prm_check_rate_limit(f"integ:{matched['id']}", 600)
+    if not ok:
+        raise HTTPException(status_code=429, detail="rate limit exceeded (per integration: 600/min)")
+    # primary: (integration_id, endpoint) как proxy для per-actor
+    # (актор известен только внутри embed-session endpoints; используем path)
+    ep_bucket = f"integ:{matched['id']}:ep:{request.url.path}"
+    ok2, _ = await _prm_check_rate_limit(ep_bucket, 60)
+    if not ok2:
+        raise HTTPException(status_code=429, detail="rate limit exceeded (per endpoint: 60/min)")
+    return {
+        "integration_id": matched["id"],
+        "integration_name": matched["name"],
+        "allowed_origins": list(matched["allowed_origins"] or []),
+        "status": matched["status"],
+    }
+
+
+async def _prm_audit(integration_id: int, request: Request, path: str,
+                     status_code: int, payload_masked: dict | None = None):
+    try:
+        pool = await _b404_pool()
+        import json as _j
+        ip = request.client.host if request.client else None
+        await pool.execute(
+            "INSERT INTO integration_audit (integration_id, actor_ip, method, path, status_code, payload_masked) "
+            "VALUES ($1, $2, $3, $4, $5, $6)",
+            integration_id, ip, request.method, path, status_code,
+            (_j.dumps(payload_masked) if payload_masked else None)
+        )
+    except Exception as e:
+        print(f"[prm-audit] {e}")
+
+
+# ── /prm/api/tenants — компания-клиент, upsert по external_id ───────────────
+class _PrmTenantBody(_BaseModel):
+    external_id: str
+    name: str
+    contact_email: str | None = None
+
+
+@app.post("/prm/api/tenants")
+async def prm_create_tenant(body: _PrmTenantBody, request: Request):
+    auth = await _prm_auth(request)
+    if not body.external_id or not body.name:
+        raise HTTPException(status_code=400, detail="external_id and name required")
+    pool = await _b404_pool()
+    slug = f"prm-{auth['integration_id']}-{body.external_id}".lower()[:60]
+    # upsert по (parent_integration_id, external_id)
+    row = await pool.fetchrow(
+        "SELECT id, slug, name, external_id, status FROM tenants "
+        "WHERE parent_integration_id=$1 AND external_id=$2",
+        auth["integration_id"], body.external_id
+    )
+    if row:
+        await pool.execute(
+            "UPDATE tenants SET name=$1, contact_email=COALESCE($2, contact_email), updated_at=now() "
+            "WHERE id=$3", body.name, body.contact_email, row["id"]
+        )
+        tid = row["id"]
+        created = False
+    else:
+        # plan_id — берём trial по умолчанию (id=1), integration может позже поменять
+        default_plan = await pool.fetchval("SELECT id FROM plans WHERE code='trial' LIMIT 1") or 1
+        tid = await pool.fetchval(
+            "INSERT INTO tenants (slug, name, contact_email, enabled, plan_id, parent_integration_id, external_id, status) "
+            "VALUES ($1, $2, $3, true, $4, $5, $6, 'active') RETURNING id",
+            slug, body.name, body.contact_email, default_plan, auth["integration_id"], body.external_id
+        )
+        created = True
+    await _prm_audit(auth["integration_id"], request, "/prm/api/tenants", 200,
+                     {"external_id": body.external_id, "created": created})
+    return {"tenant_id": tid, "external_id": body.external_id, "created": created}
+
+
+@app.patch("/prm/api/tenants/{tenant_id}")
+async def prm_patch_tenant(tenant_id: int, body: dict, request: Request):
+    auth = await _prm_auth(request)
+    pool = await _b404_pool()
+    owner = await pool.fetchval(
+        "SELECT id FROM tenants WHERE id=$1 AND parent_integration_id=$2",
+        tenant_id, auth["integration_id"]
+    )
+    if not owner:
+        raise HTTPException(status_code=404, detail="tenant not found")
+    fields = {k: v for k, v in body.items() if k in ("name", "contact_email")}
+    if not fields:
+        return {"ok": True, "noop": True}
+    sets = ", ".join(f"{k}=${i+1}" for i, k in enumerate(fields.keys()))
+    await pool.execute(
+        f"UPDATE tenants SET {sets}, updated_at=now() WHERE id=${len(fields)+1}",
+        *fields.values(), tenant_id
+    )
+    await _prm_audit(auth["integration_id"], request, f"/prm/api/tenants/{tenant_id}", 200, fields)
+    return {"ok": True, "updated": list(fields.keys())}
+
+
+@app.post("/prm/api/tenants/{tenant_id}/pause")
+async def prm_pause_tenant(tenant_id: int, request: Request):
+    auth = await _prm_auth(request)
+    pool = await _b404_pool()
+    owner = await pool.fetchval(
+        "SELECT id FROM tenants WHERE id=$1 AND parent_integration_id=$2",
+        tenant_id, auth["integration_id"]
+    )
+    if not owner:
+        raise HTTPException(status_code=404, detail="tenant not found")
+    await pool.execute("UPDATE tenants SET status='paused', enabled=false, updated_at=now() WHERE id=$1", tenant_id)
+    # revoke все embed-сессии тенанта
+    revoked = await pool.execute(
+        "UPDATE embed_sessions SET revoked_at=now() WHERE tenant_id=$1 AND revoked_at IS NULL",
+        tenant_id
+    )
+    await _prm_audit(auth["integration_id"], request, f"/prm/api/tenants/{tenant_id}/pause", 200,
+                     {"tenant_id": tenant_id})
+    return {"ok": True, "tenant_id": tenant_id, "status": "paused"}
+
+
+@app.post("/prm/api/tenants/{tenant_id}/resume")
+async def prm_resume_tenant(tenant_id: int, request: Request):
+    auth = await _prm_auth(request)
+    pool = await _b404_pool()
+    owner = await pool.fetchval(
+        "SELECT id FROM tenants WHERE id=$1 AND parent_integration_id=$2",
+        tenant_id, auth["integration_id"]
+    )
+    if not owner:
+        raise HTTPException(status_code=404, detail="tenant not found")
+    await pool.execute("UPDATE tenants SET status='active', enabled=true, updated_at=now() WHERE id=$1", tenant_id)
+    await _prm_audit(auth["integration_id"], request, f"/prm/api/tenants/{tenant_id}/resume", 200,
+                     {"tenant_id": tenant_id})
+    return {"ok": True, "tenant_id": tenant_id, "status": "active"}
+
+
+# ── /prm/api/tenants/{tid}/operators — админ компании, upsert ────────────────
+class _PrmActorBody(_BaseModel):
+    external_id: str
+    email: str | None = None
+    name: str | None = None
+    role: str | None = "admin"
+    perms: dict | None = None
+
+
+@app.post("/prm/api/tenants/{tenant_id}/operators")
+async def prm_create_operator(tenant_id: int, body: _PrmActorBody, request: Request):
+    auth = await _prm_auth(request)
+    if not body.external_id:
+        raise HTTPException(status_code=400, detail="external_id required")
+    pool = await _b404_pool()
+    owner = await pool.fetchval(
+        "SELECT id FROM tenants WHERE id=$1 AND parent_integration_id=$2",
+        tenant_id, auth["integration_id"]
+    )
+    if not owner:
+        raise HTTPException(status_code=404, detail="tenant not found")
+    import json as _j
+    row = await pool.fetchrow(
+        "SELECT id FROM tenant_operators WHERE tenant_id=$1 AND external_id=$2",
+        tenant_id, body.external_id
+    )
+    perms_json = _j.dumps(body.perms) if body.perms is not None else None
+    if row:
+        await pool.execute(
+            "UPDATE tenant_operators SET email=COALESCE($1,email), name=COALESCE($2,name), "
+            "role=COALESCE($3,role), perms=COALESCE($4::jsonb,perms), active=true WHERE id=$5",
+            body.email, body.name, body.role, perms_json, row["id"]
+        )
+        oid = row["id"]
+        created = False
+    else:
+        oid = await pool.fetchval(
+            "INSERT INTO tenant_operators (tenant_id, external_id, email, name, role, perms) "
+            "VALUES ($1, $2, $3, $4, $5, COALESCE($6::jsonb, '{}'::jsonb)) RETURNING id",
+            tenant_id, body.external_id, body.email, body.name, body.role or "admin", perms_json
+        )
+        created = True
+    await _prm_audit(auth["integration_id"], request, f"/prm/api/tenants/{tenant_id}/operators", 200,
+                     {"external_id": body.external_id, "created": created})
+    return {"operator_id": oid, "external_id": body.external_id, "created": created}
+
+
+@app.post("/prm/api/tenants/{tenant_id}/contacts")
+async def prm_create_contact(tenant_id: int, body: _PrmActorBody, request: Request):
+    auth = await _prm_auth(request)
+    if not body.external_id:
+        raise HTTPException(status_code=400, detail="external_id required")
+    pool = await _b404_pool()
+    owner = await pool.fetchval(
+        "SELECT id FROM tenants WHERE id=$1 AND parent_integration_id=$2",
+        tenant_id, auth["integration_id"]
+    )
+    if not owner:
+        raise HTTPException(status_code=404, detail="tenant not found")
+    row = await pool.fetchrow(
+        "SELECT id FROM tenant_contacts WHERE tenant_id=$1 AND external_id=$2",
+        tenant_id, body.external_id
+    )
+    if row:
+        await pool.execute(
+            "UPDATE tenant_contacts SET email=COALESCE($1,email), name=COALESCE($2,name), active=true WHERE id=$3",
+            body.email, body.name, row["id"]
+        )
+        cid = row["id"]
+        created = False
+    else:
+        cid = await pool.fetchval(
+            "INSERT INTO tenant_contacts (tenant_id, external_id, email, name) "
+            "VALUES ($1, $2, $3, $4) RETURNING id",
+            tenant_id, body.external_id, body.email, body.name
+        )
+        created = True
+    await _prm_audit(auth["integration_id"], request, f"/prm/api/tenants/{tenant_id}/contacts", 200,
+                     {"external_id": body.external_id, "created": created})
+    return {"contact_id": cid, "external_id": body.external_id, "created": created}
+
+
+# ── /prm/api/embed-session — opaque one-time code ────────────────────────────
+class _PrmEmbedSessionBody(_BaseModel):
+    tenant_id: int
+    actor_external_id: str
+    actor_type: str  # 'operator' | 'contact'
+    ttl: int | None = 60
+
+
+@app.post("/prm/api/embed-session")
+async def prm_embed_session(body: _PrmEmbedSessionBody, request: Request):
+    auth = await _prm_auth(request)
+    if body.actor_type not in ("operator", "contact"):
+        raise HTTPException(status_code=400, detail="actor_type must be 'operator' or 'contact'")
+    ttl = max(30, min(120, body.ttl or 60))
+    pool = await _b404_pool()
+    # проверяем tenant
+    t = await pool.fetchrow(
+        "SELECT id, status FROM tenants WHERE id=$1 AND parent_integration_id=$2",
+        body.tenant_id, auth["integration_id"]
+    )
+    if not t:
+        raise HTTPException(status_code=404, detail="tenant not found")
+    if t["status"] != "active":
+        raise HTTPException(status_code=403, detail=f"tenant status={t['status']}")
+    # ищем актера
+    table = "tenant_operators" if body.actor_type == "operator" else "tenant_contacts"
+    actor = await pool.fetchrow(
+        f"SELECT id, active FROM {table} WHERE tenant_id=$1 AND external_id=$2",
+        body.tenant_id, body.actor_external_id
+    )
+    if not actor:
+        raise HTTPException(status_code=404, detail=f"{body.actor_type} not found")
+    if not actor["active"]:
+        raise HTTPException(status_code=403, detail=f"{body.actor_type} inactive")
+    # генерируем opaque-код и сохраняем
+    code = _secrets_prm.token_hex(32)
+    now = _dt_prm.datetime.now(_dt_prm.timezone.utc)
+    expires = now + _dt_prm.timedelta(seconds=ttl)
+    await pool.execute(
+        "INSERT INTO embed_sessions (code, tenant_id, actor_id, actor_type, expires_at) "
+        "VALUES ($1, $2, $3, $4, $5)",
+        code, body.tenant_id, actor["id"], body.actor_type, expires
+    )
+    await _prm_audit(auth["integration_id"], request, "/prm/api/embed-session", 200,
+                     {"tenant_id": body.tenant_id, "actor_type": body.actor_type,
+                      "actor_external_id": body.actor_external_id})
+    # embed_url — на нашем домене (в prod будет CNAME клиента)
+    host = request.headers.get("host", "217-149-25-34.sslip.io")
+    return {
+        "embed_url": f"https://{host}/embed",
+        "code": code,
+        "expires_in": ttl,
+        "expires_at": expires.isoformat(),
+    }
+
+
+# ── /embed — установка сессии + редирект ─────────────────────────────────────
+from fastapi import Form as _Form
+from fastapi.responses import RedirectResponse as _RedirectResponse, Response as _Response
+
+
+@app.post("/embed")
+async def prm_embed(code: str = _Form(...), mode: str = _Form("cookie"), request: Request = None):
+    """
+    Установить embed-сессию по одноразовому коду.
+    mode:
+      'cookie'  (default) — set-cookie + 302 → /admin?embed=1
+      'bearer'            — JSON { session_token, redirect_url } — для fallback когда
+                            cookies заблокированы (Safari private, uBlock и т.п.)
+    """
+    # IP-level защитный лимит 1000/мин (для DDoS)
+    ip = _prm_client_ip(request)
+    ok, _ = await _prm_check_rate_limit(f"embed:ip:{ip}", 1000)
+    if not ok:
+        raise HTTPException(status_code=429, detail="too many embed attempts from this IP")
+    pool = await _b404_pool()
+    # атомарный check-and-set: используем UPDATE ... RETURNING
+    session_id = _secrets_prm.token_hex(24)
+    max_lifetime = _dt_prm.datetime.now(_dt_prm.timezone.utc) + _dt_prm.timedelta(hours=8)
+    row = await pool.fetchrow(
+        "UPDATE embed_sessions SET used_at=now(), session_id=$1, "
+        "session_expires_at=$2, last_activity_at=now() "
+        "WHERE code=$3 AND used_at IS NULL AND expires_at > now() AND revoked_at IS NULL "
+        "RETURNING tenant_id, actor_id, actor_type",
+        session_id, max_lifetime, code
+    )
+    if not row:
+        raise HTTPException(status_code=400, detail="invalid or expired code")
+    integ = await pool.fetchrow(
+        "SELECT i.id, i.allowed_origins FROM integrations i "
+        "JOIN tenants t ON t.parent_integration_id=i.id WHERE t.id=$1", row["tenant_id"]
+    )
+    origins = " ".join(list(integ["allowed_origins"] or [])) if integ else ""
+
+    # Bearer-режим: возвращаем JSON вместо cookie+redirect
+    if mode == "bearer":
+        from fastapi.responses import JSONResponse as _JSONResponse
+        resp = _JSONResponse({
+            "session_token": session_id,
+            "redirect_url": "/admin?embed=1",
+            "expires_at": max_lifetime.isoformat(),
+            "usage": "Send in header 'X-Session-Token: <token>' or 'Authorization: Bearer sess_<token>' on every /admin/api/embed/* request",
+        })
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        resp.headers["Referrer-Policy"] = "no-referrer"
+        return resp
+
+    # Cookie-режим (default)
+    resp = _RedirectResponse(url="/admin?embed=1", status_code=302)
+    resp.set_cookie(
+        key="orchestra_sess", value=session_id,
+        max_age=1800, httponly=True, secure=True, samesite="none", path="/"
+    )
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    if origins:
+        resp.headers["Content-Security-Policy"] = f"frame-ancestors {origins};"
+    return resp
+
+
+# ── /prm/api/actors/{aid}/revoke — мгновенный logout ─────────────────────────
+@app.post("/prm/api/actors/{actor_id}/revoke")
+async def prm_revoke(actor_id: int, request: Request):
+    auth = await _prm_auth(request)
+    actor_type = request.query_params.get("actor_type", "operator")
+    if actor_type not in ("operator", "contact"):
+        raise HTTPException(status_code=400, detail="actor_type must be 'operator' or 'contact'")
+    pool = await _b404_pool()
+    # revoke все активные embed_sessions этого актора в тенантах интеграции
+    result = await pool.execute(
+        "UPDATE embed_sessions es SET revoked_at=now() "
+        "FROM tenants t WHERE es.tenant_id=t.id AND t.parent_integration_id=$1 "
+        "AND es.actor_id=$2 AND es.actor_type=$3 AND es.revoked_at IS NULL",
+        auth["integration_id"], actor_id, actor_type
+    )
+    await _prm_audit(auth["integration_id"], request, f"/prm/api/actors/{actor_id}/revoke", 200,
+                     {"actor_id": actor_id, "actor_type": actor_type})
+    return {"ok": True, "revoked": result}
+
+
+# ── /prm/api/events — курсорный polling (ТЗ v1.1 § 10) ──────────────────────
+_PRM_EVENTS_RETENTION_DAYS = 30
+
+
+@app.get("/prm/api/events")
+async def prm_events(request: Request, since: int = 0, limit: int = 100):
+    auth = await _prm_auth(request)
+    limit = max(1, min(500, limit))
+    pool = await _b404_pool()
+
+    # cursor_reset: если клиент отстал больше чем на retention — сбрасываем на current head
+    cursor_reset = False
+    if since > 0:
+        oldest_id = await pool.fetchval(
+            "SELECT MIN(id) FROM integration_events WHERE integration_id=$1",
+            auth["integration_id"]
+        )
+        if oldest_id is not None and since < oldest_id:
+            cursor_reset = True
+            head = await pool.fetchval(
+                "SELECT COALESCE(MAX(id), 0) FROM integration_events WHERE integration_id=$1",
+                auth["integration_id"]
+            )
+            return {
+                "events": [],
+                "next_cursor": head or 0,
+                "cursor_reset": True,
+                "reason": "cursor_expired",
+                "hint": f"events older than {_PRM_EVENTS_RETENTION_DAYS} days have been retained-out; resuming from head",
+            }
+
+    rows = await pool.fetch(
+        "SELECT id, tenant_id, actor_id, actor_type, event_type, payload, created_at "
+        "FROM integration_events WHERE integration_id=$1 AND id > $2 "
+        "ORDER BY id ASC LIMIT $3",
+        auth["integration_id"], since, limit
+    )
+    events = [{
+        "id": r["id"], "tenant_id": r["tenant_id"], "actor_id": r["actor_id"],
+        "actor_type": r["actor_type"], "event_type": r["event_type"],
+        "payload": r["payload"], "created_at": r["created_at"].isoformat()
+    } for r in rows]
+    next_cursor = events[-1]["id"] if events else since
+    return {"events": events, "next_cursor": next_cursor}
+
+
+# ── /prm/api/whoami — для отладки авторизации ────────────────────────────────
+@app.get("/prm/api/whoami")
+async def prm_whoami(request: Request):
+    auth = await _prm_auth(request)
+    return {"integration_id": auth["integration_id"], "name": auth["integration_name"],
+            "allowed_origins": auth["allowed_origins"], "status": auth["status"]}
+
+
+# ── /health/prm — публичный healthcheck (без auth, для мониторинга) ──────────
+@app.get("/health/prm")
+async def prm_health():
+    """Проверка живости PRM v1.1 API: БД, Redis, ключевые таблицы.
+    Возвращает 200 если всё ok, 503 при сбое любой компоненты."""
+    checks = {"db": False, "redis": False, "tables": False, "worker": False}
+    errors = []
+    # 1. DB
+    try:
+        pool = await _b404_pool()
+        r = await pool.fetchval("SELECT 1")
+        checks["db"] = r == 1
+    except Exception as e:
+        errors.append(f"db: {e}")
+    # 2. Redis
+    try:
+        r = await _get_redis()
+        if r:
+            await r.ping()
+            checks["redis"] = True
+        else:
+            errors.append("redis: not initialised")
+    except Exception as e:
+        errors.append(f"redis: {e}")
+    # 3. Ключевые таблицы
+    try:
+        pool = await _b404_pool()
+        tables = ("integrations", "tenant_operators", "tenant_contacts",
+                  "embed_sessions", "integration_events", "integration_audit")
+        for t in tables:
+            _ = await pool.fetchval(f"SELECT COUNT(*) FROM {t}")
+        checks["tables"] = True
+    except Exception as e:
+        errors.append(f"tables: {e}")
+    # 4. Worker retention (проверяем что events не переполнены — не старше 30д есть)
+    try:
+        pool = await _b404_pool()
+        oldest = await pool.fetchval(
+            "SELECT MIN(created_at) FROM integration_events"
+        )
+        if oldest is None:
+            checks["worker"] = True  # пустая — норма
+        else:
+            import datetime as _dt
+            age = (_dt.datetime.now(_dt.timezone.utc) - oldest).days
+            checks["worker"] = age <= 32  # запас 2 дня
+            if not checks["worker"]:
+                errors.append(f"worker: oldest event {age} days > 32")
+    except Exception as e:
+        errors.append(f"worker: {e}")
+
+    status_code = 200 if all(checks.values()) else 503
+    from fastapi.responses import JSONResponse as _JSONResp
+    return _JSONResp(
+        {"ok": all(checks.values()), "checks": checks, "errors": errors},
+        status_code=status_code
+    )
+
+
+# ── /prm/api/integration/rotate-credential — ротация API credential ──────────
+# ТЗ v1.1 § 4: ротация с переходным периодом 24 часа (оба credential валидны).
+# Требует старый credential в Authorization. Возвращает НОВЫЙ credential один раз.
+@app.post("/prm/api/integration/rotate-credential")
+async def prm_rotate_credential(request: Request):
+    auth = await _prm_auth(request)
+    pool = await _b404_pool()
+    # генерируем новый
+    new_cred = "prm_" + _secrets_prm.token_hex(32)
+    new_hash = _bcrypt_prm.hashpw(new_cred.encode(), _bcrypt_prm.gensalt(rounds=12)).decode()
+    # для переходного периода 24ч храним ОБА hash'а в одной строке integrations через доп. поле.
+    # Простая схема: колонка api_credential_hash_prev + api_credential_prev_expires_at.
+    # Проверим что колонки есть; если нет — миграция на лету.
+    try:
+        await pool.execute(
+            "ALTER TABLE integrations ADD COLUMN IF NOT EXISTS api_credential_hash_prev text; "
+            "ALTER TABLE integrations ADD COLUMN IF NOT EXISTS api_credential_prev_expires_at timestamptz;"
+        )
+    except Exception:
+        pass
+    # сохраняем ТЕКУЩИЙ hash как prev, новый — в основную колонку
+    grace_expires = _dt_prm.datetime.now(_dt_prm.timezone.utc) + _dt_prm.timedelta(hours=24)
+    await pool.execute(
+        "UPDATE integrations SET "
+        "  api_credential_hash_prev = api_credential_hash, "
+        "  api_credential_prev_expires_at = $1, "
+        "  api_credential_hash = $2, "
+        "  updated_at = now() "
+        "WHERE id = $3",
+        grace_expires, new_hash, auth["integration_id"]
+    )
+    await _prm_audit(auth["integration_id"], request, "/prm/api/integration/rotate-credential", 200,
+                     {"grace_period_hours": 24, "prev_expires_at": grace_expires.isoformat()})
+    return {
+        "new_credential": new_cred,       # ПОКАЗАН ОДИН РАЗ
+        "prev_valid_until": grace_expires.isoformat(),
+        "grace_period_hours": 24,
+        "warning": "Save this credential IMMEDIATELY. Only bcrypt-hash is stored server-side. "
+                   "Previous credential is still valid for 24h (transition period).",
+    }
+
+
+# ── DELETE /prm/api/tenants/{id} — soft-delete + retention 30 дней ───────────
+@app.delete("/prm/api/tenants/{tenant_id}")
+async def prm_delete_tenant(tenant_id: int, request: Request):
+    auth = await _prm_auth(request)
+    pool = await _b404_pool()
+    owner = await pool.fetchrow(
+        "SELECT id, status FROM tenants WHERE id=$1 AND parent_integration_id=$2",
+        tenant_id, auth["integration_id"]
+    )
+    if not owner:
+        raise HTTPException(status_code=404, detail="tenant not found")
+    scheduled = _dt_prm.datetime.now(_dt_prm.timezone.utc) + _dt_prm.timedelta(days=30)
+    await pool.execute(
+        "UPDATE tenants SET status='pending_deletion', enabled=false, "
+        "delete_scheduled_at=$1, updated_at=now() WHERE id=$2",
+        scheduled, tenant_id
+    )
+    # немедленно revoked все embed-сессии тенанта
+    await pool.execute(
+        "UPDATE embed_sessions SET revoked_at=now() WHERE tenant_id=$1 AND revoked_at IS NULL",
+        tenant_id
+    )
+    await _prm_audit(auth["integration_id"], request, f"/prm/api/tenants/{tenant_id}", 200,
+                     {"soft_delete": True, "scheduled_at": scheduled.isoformat()})
+    return {
+        "ok": True, "tenant_id": tenant_id, "status": "pending_deletion",
+        "delete_scheduled_at": scheduled.isoformat(),
+        "restore_before": scheduled.isoformat(),
+    }
+
+
+@app.post("/prm/api/tenants/{tenant_id}/restore")
+async def prm_restore_tenant(tenant_id: int, request: Request):
+    auth = await _prm_auth(request)
+    pool = await _b404_pool()
+    row = await pool.fetchrow(
+        "SELECT id, status, delete_scheduled_at FROM tenants "
+        "WHERE id=$1 AND parent_integration_id=$2",
+        tenant_id, auth["integration_id"]
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="tenant not found")
+    if row["status"] != "pending_deletion":
+        raise HTTPException(status_code=400, detail=f"tenant status={row['status']}, only pending_deletion can be restored")
+    await pool.execute(
+        "UPDATE tenants SET status='active', enabled=true, delete_scheduled_at=NULL, updated_at=now() "
+        "WHERE id=$1", tenant_id
+    )
+    await _prm_audit(auth["integration_id"], request, f"/prm/api/tenants/{tenant_id}/restore", 200,
+                     {"tenant_id": tenant_id})
+    return {"ok": True, "tenant_id": tenant_id, "status": "active"}
+
+
+# ── DELETE operator / contact — пометить inactive ───────────────────────────
+@app.delete("/prm/api/tenants/{tenant_id}/operators/{operator_id}")
+async def prm_delete_operator(tenant_id: int, operator_id: int, request: Request):
+    auth = await _prm_auth(request)
+    pool = await _b404_pool()
+    owner = await pool.fetchval(
+        "SELECT id FROM tenants WHERE id=$1 AND parent_integration_id=$2",
+        tenant_id, auth["integration_id"]
+    )
+    if not owner:
+        raise HTTPException(status_code=404, detail="tenant not found")
+    result = await pool.execute(
+        "UPDATE tenant_operators SET active=false WHERE id=$1 AND tenant_id=$2 AND active=true",
+        operator_id, tenant_id
+    )
+    if result.endswith("0"):
+        raise HTTPException(status_code=404, detail="operator not found or already inactive")
+    # revoked все embed_sessions этого оператора
+    await pool.execute(
+        "UPDATE embed_sessions SET revoked_at=now() "
+        "WHERE tenant_id=$1 AND actor_id=$2 AND actor_type='operator' AND revoked_at IS NULL",
+        tenant_id, operator_id
+    )
+    await _prm_audit(auth["integration_id"], request, f"/prm/api/tenants/{tenant_id}/operators/{operator_id}", 200,
+                     {"deactivated": True})
+    return {"ok": True, "operator_id": operator_id, "active": False}
+
+
+@app.delete("/prm/api/tenants/{tenant_id}/contacts/{contact_id}")
+async def prm_delete_contact(tenant_id: int, contact_id: int, request: Request):
+    auth = await _prm_auth(request)
+    pool = await _b404_pool()
+    owner = await pool.fetchval(
+        "SELECT id FROM tenants WHERE id=$1 AND parent_integration_id=$2",
+        tenant_id, auth["integration_id"]
+    )
+    if not owner:
+        raise HTTPException(status_code=404, detail="tenant not found")
+    result = await pool.execute(
+        "UPDATE tenant_contacts SET active=false WHERE id=$1 AND tenant_id=$2 AND active=true",
+        contact_id, tenant_id
+    )
+    if result.endswith("0"):
+        raise HTTPException(status_code=404, detail="contact not found or already inactive")
+    await pool.execute(
+        "UPDATE embed_sessions SET revoked_at=now() "
+        "WHERE tenant_id=$1 AND actor_id=$2 AND actor_type='contact' AND revoked_at IS NULL",
+        tenant_id, contact_id
+    )
+    await _prm_audit(auth["integration_id"], request, f"/prm/api/tenants/{tenant_id}/contacts/{contact_id}", 200,
+                     {"deactivated": True})
+    return {"ok": True, "contact_id": contact_id, "active": False}
+
+
+# ── /prm/api/tenants/{id}/export — async job ────────────────────────────────
+@app.post("/prm/api/tenants/{tenant_id}/export")
+async def prm_export_tenant(tenant_id: int, request: Request):
+    auth = await _prm_auth(request)
+    pool = await _b404_pool()
+    owner = await pool.fetchval(
+        "SELECT id FROM tenants WHERE id=$1 AND parent_integration_id=$2",
+        tenant_id, auth["integration_id"]
+    )
+    if not owner:
+        raise HTTPException(status_code=404, detail="tenant not found")
+    job_id = "job_" + _secrets_prm.token_hex(12)
+    import json as _j
+    await pool.execute(
+        "INSERT INTO async_jobs (id, integration_id, tenant_id, job_type, status, result) "
+        "VALUES ($1, $2, $3, 'export', 'queued', $4::jsonb)",
+        job_id, auth["integration_id"], tenant_id, _j.dumps({"requested_at": _dt_prm.datetime.now(_dt_prm.timezone.utc).isoformat()})
+    )
+    # реальный worker вычитывает из async_jobs где status='queued' и обрабатывает.
+    # для MVP инкапсулируем в фоновой корутине асинхронно (для реального prod — Celery/RQ).
+    import asyncio as _aio
+    _aio.create_task(_prm_run_export_job(job_id, tenant_id))
+    await _prm_audit(auth["integration_id"], request, f"/prm/api/tenants/{tenant_id}/export", 200,
+                     {"job_id": job_id})
+    return {"job_id": job_id, "status": "queued"}
+
+
+async def _prm_run_export_job(job_id: str, tenant_id: int):
+    """MVP-реализация экспорта: собирает основные данные тенанта в JSON и сохраняет в async_jobs.result.
+    В prod вместо этого — стриминг в S3 и signed URL."""
+    try:
+        pool = await _b404_pool()
+        await pool.execute("UPDATE async_jobs SET status='processing', updated_at=now() WHERE id=$1", job_id)
+        # собираем данные
+        tenant = await pool.fetchrow("SELECT id, slug, name, external_id, status, created_at FROM tenants WHERE id=$1", tenant_id)
+        operators = await pool.fetch("SELECT id, external_id, email, name, role, active FROM tenant_operators WHERE tenant_id=$1", tenant_id)
+        contacts = await pool.fetch("SELECT id, external_id, email, name, active FROM tenant_contacts WHERE tenant_id=$1", tenant_id)
+        sessions = await pool.fetch("SELECT COUNT(*) AS total FROM embed_sessions WHERE tenant_id=$1", tenant_id)
+        import json as _j
+        export = {
+            "tenant": {**dict(tenant), "created_at": tenant["created_at"].isoformat()},
+            "operators": [dict(o) for o in operators],
+            "contacts": [dict(c) for c in contacts],
+            "sessions_total": sessions[0]["total"],
+            "generated_at": _dt_prm.datetime.now(_dt_prm.timezone.utc).isoformat(),
+        }
+        # готовый архив кладём прямо в result.data — для MVP; в prod → S3
+        await pool.execute(
+            "UPDATE async_jobs SET status='done', result=$1::jsonb, updated_at=now() WHERE id=$2",
+            _j.dumps({"data": export, "download_url": None, "note": "MVP: data inline; prod будет S3 signed URL"}),
+            job_id
+        )
+    except Exception as e:
+        import json as _j
+        pool = await _b404_pool()
+        await pool.execute("UPDATE async_jobs SET status='failed', result=$1::jsonb, updated_at=now() WHERE id=$2",
+                           _j.dumps({"error": str(e)}), job_id)
+
+
+@app.get("/prm/api/jobs/{job_id}")
+async def prm_get_job(job_id: str, request: Request):
+    auth = await _prm_auth(request)
+    pool = await _b404_pool()
+    row = await pool.fetchrow(
+        "SELECT id, job_type, status, result, created_at, updated_at "
+        "FROM async_jobs WHERE id=$1 AND integration_id=$2",
+        job_id, auth["integration_id"]
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="job not found")
+    return {
+        "job_id": row["id"], "job_type": row["job_type"], "status": row["status"],
+        "created_at": row["created_at"].isoformat(),
+        "updated_at": row["updated_at"].isoformat(),
+        "result": row["result"],
+    }
+
+
+# ── Cookie-based embed-session (Этап E.1) ────────────────────────────────────
+# Читает cookie orchestra_sess, находит активную сессию, проверяет idle/max timeout,
+# продлевает last_activity_at. Не пересекается со старым JWT-auth: если cookie нет —
+# возвращает None и вызывающий код работает по старой цепочке.
+_PRM_IDLE_TIMEOUT_MIN = 30
+_PRM_MAX_LIFETIME_HR  = 8
+
+
+async def _get_embed_session(request: Request) -> dict | None:
+    # ТЗ v1.1 § 4.4: bearer-fallback — если cookies заблокированы (Safari private / uBlock),
+    # клиент передаёт токен в заголовке. Приоритет — cookie, потом header.
+    cookie_session = request.cookies.get("orchestra_sess")
+    session_id = cookie_session
+    if not session_id:
+        auth_hdr = request.headers.get("Authorization", "")
+        # маркер 'Bearer sess_' — отличаем от 'Bearer prm_' (это API credential, не сессия)
+        if auth_hdr.startswith("Bearer sess_"):
+            session_id = auth_hdr[len("Bearer sess_"):].strip()
+    if not session_id:
+        session_id = request.headers.get("X-Session-Token", "").strip() or None
+    if not session_id:
+        return None
+    pool = await _b404_pool()
+    now = _dt_prm.datetime.now(_dt_prm.timezone.utc)
+    idle_cutoff = now - _dt_prm.timedelta(minutes=_PRM_IDLE_TIMEOUT_MIN)
+    row = await pool.fetchrow(
+        "SELECT es.tenant_id, es.actor_id, es.actor_type, es.perms, "
+        "       es.session_expires_at, es.last_activity_at, es.revoked_at, "
+        "       t.parent_integration_id, t.status AS tenant_status "
+        "FROM embed_sessions es JOIN tenants t ON t.id = es.tenant_id "
+        "WHERE es.session_id = $1",
+        session_id
+    )
+    if not row:
+        return None
+    if row["revoked_at"] is not None:
+        return None
+    if row["session_expires_at"] and row["session_expires_at"] < now:
+        return None  # max-timeout истёк
+    if row["last_activity_at"] and row["last_activity_at"] < idle_cutoff:
+        return None  # idle-timeout истёк
+    if row["tenant_status"] != "active":
+        return None
+    # проверяем что актор ещё активен
+    table = "tenant_operators" if row["actor_type"] == "operator" else "tenant_contacts"
+    active = await pool.fetchval(
+        f"SELECT active FROM {table} WHERE id=$1", row["actor_id"]
+    )
+    if not active:
+        return None
+    # CSRF-защита (только для cookie-режима: bearer не автоматически отправляется браузером).
+    # ТЗ v1.1 § 4 безопасность.
+    if cookie_session:
+        origin = request.headers.get("origin") or request.headers.get("referer") or ""
+        if origin:
+            from urllib.parse import urlparse
+            try:
+                p = urlparse(origin)
+                origin_norm = f"{p.scheme}://{p.netloc}"
+            except Exception:
+                origin_norm = origin
+            allowed_origins = await pool.fetchval(
+                "SELECT allowed_origins FROM integrations WHERE id=$1",
+                row["parent_integration_id"]
+            ) or []
+            # same-origin (наш собственный домен) — разрешаем (для тестов + custom-domain).
+            # За reverse-proxy (Caddy) request.url отдаёт internal URL — используем публичный Host.
+            fwd_proto = request.headers.get("x-forwarded-proto", "https")
+            fwd_host = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
+            public_origin = f"{fwd_proto}://{fwd_host}"
+            same_origin_ok = origin_norm == public_origin
+            if not (same_origin_ok or origin_norm in allowed_origins):
+                raise HTTPException(status_code=403, detail=f"CSRF: origin '{origin_norm}' not in allowed_origins")
+        elif request.method not in ("GET", "HEAD"):
+            # POST/PUT/DELETE без Origin/Referer — потенциальный CSRF, блокируем
+            raise HTTPException(status_code=403, detail="CSRF: missing Origin/Referer on write request")
+    # продлеваем last_activity_at
+    await pool.execute(
+        "UPDATE embed_sessions SET last_activity_at=now() WHERE session_id=$1",
+        session_id
+    )
+    return {
+        "tenant_id": row["tenant_id"],
+        "actor_id": row["actor_id"],
+        "actor_type": row["actor_type"],
+        "perms": row["perms"] or {},
+        "integration_id": row["parent_integration_id"],
+        "session_id": session_id,
+        "session_expires_at": row["session_expires_at"],
+    }
+
+
+@app.get("/admin/api/embed/whoami")
+async def embed_whoami(request: Request):
+    """Проверка активной embed-сессии. Возвращает 200 c данными актора или 401."""
+    sess = await _get_embed_session(request)
+    if not sess:
+        raise HTTPException(status_code=401, detail="no active embed session")
+    return {
+        "tenant_id": sess["tenant_id"],
+        "actor_id": sess["actor_id"],
+        "actor_type": sess["actor_type"],
+        "integration_id": sess["integration_id"],
+        "perms": sess["perms"],
+        "session_expires_at": sess["session_expires_at"].isoformat() if sess["session_expires_at"] else None,
+    }
+
+
+@app.post("/admin/api/embed/logout")
+async def embed_logout(request: Request):
+    """Явный logout текущей embed-сессии.
+    CSRF-защита через _require_embed (проверка Origin для cookie-режима)."""
+    sess = await _require_embed(request)  # 403 если чужой Origin, 401 если нет сессии
+    pool = await _b404_pool()
+    result = await pool.execute(
+        "UPDATE embed_sessions SET revoked_at=now() "
+        "WHERE session_id=$1 AND revoked_at IS NULL",
+        sess["session_id"]
+    )
+    return {"ok": True, "was_active": not result.endswith("0")}
+
+
+# ── Embed-endpoints с RBAC (Этап E.2) ────────────────────────────────────────
+# Отдельные endpoints для iframe-режима PRM Online.
+# Все старые /admin/api/* (Заря, Аиша) — без изменений, работают через JWT.
+
+
+async def _require_embed(request: Request) -> dict:
+    # CSRF-проверка теперь внутри _get_embed_session (единая точка).
+    sess = await _get_embed_session(request)
+    if not sess:
+        raise HTTPException(status_code=401, detail="no active embed session")
+    return sess
+
+
+@app.get("/admin/api/embed/leads")
+async def embed_leads(request: Request, status: str | None = None, search: str | None = None):
+    """Лиды в embed-режиме. Operator видит все лиды тенанта; contact — только те,
+    у которых assigned_contact_id = actor.id."""
+    sess = await _require_embed(request)
+    pool = await _b404_pool()
+    where = ["l.tenant_id = $1"]
+    params: list = [sess["tenant_id"]]
+    if sess["actor_type"] == "contact":
+        params.append(sess["actor_id"])
+        where.append(f"l.assigned_contact_id = ${len(params)}")
+    if status:
+        params.append(status)
+        where.append(f"l.status = ${len(params)}")
+    if search:
+        params.append(f"%{search}%")
+        idx = len(params)
+        where.append(
+            f"(l.name ILIKE ${idx} OR l.phone ILIKE ${idx} OR l.email ILIKE ${idx} "
+            f"OR l.telegram ILIKE ${idx} OR l.company ILIKE ${idx})"
+        )
+    rows = await pool.fetch(
+        f"""SELECT l.id, l.session_id, l.name, l.phone, l.email, l.telegram, l.company, l.note,
+                   l.created_at, l.updated_at, l.status,
+                   l.assigned_operator_id, l.assigned_contact_id
+              FROM bot_404_leads l
+             WHERE {" AND ".join(where)}
+             ORDER BY l.updated_at DESC NULLS LAST, l.created_at DESC
+             LIMIT 500""",
+        *params,
+    )
+    return {
+        "leads": [dict(r) for r in rows],
+        "actor_type": sess["actor_type"],
+        "actor_id": sess["actor_id"],
+        "tenant_id": sess["tenant_id"],
+    }
+
+
+@app.get("/admin/api/embed/sessions")
+async def embed_sessions_list(request: Request):
+    """Список чат-сессий (диалогов) в embed-режиме.
+    Operator видит все чаты тенанта; contact видит только чаты, где session_id связан с
+    лидом с assigned_contact_id = actor.id."""
+    sess = await _require_embed(request)
+    pool = await _b404_pool()
+    if sess["actor_type"] == "contact":
+        # чаты, у которых есть лид, назначенный этому контакту
+        rows = await pool.fetch(
+            """SELECT DISTINCT l.session_id, l.name, l.phone, l.status, l.updated_at
+                 FROM bot_404_leads l
+                WHERE l.tenant_id = $1 AND l.assigned_contact_id = $2
+                ORDER BY l.updated_at DESC NULLS LAST LIMIT 200""",
+            sess["tenant_id"], sess["actor_id"],
+        )
+    else:
+        # operator видит все чаты тенанта
+        rows = await pool.fetch(
+            """SELECT DISTINCT session_id, MAX(created_at) AS last_ts
+                 FROM bot_404_log
+                WHERE tenant_id = $1
+                GROUP BY session_id
+                ORDER BY last_ts DESC LIMIT 200""",
+            sess["tenant_id"],
+        )
+    return {
+        "sessions": [dict(r) for r in rows],
+        "actor_type": sess["actor_type"],
+    }
+
+
+@app.get("/admin/api/embed/sessions/{session_id}/messages")
+async def embed_session_messages(session_id: str, request: Request):
+    """Сообщения одного диалога. Contact получает 403 если session не связан с его лидом."""
+    sess = await _require_embed(request)
+    pool = await _b404_pool()
+    if sess["actor_type"] == "contact":
+        allowed = await pool.fetchval(
+            "SELECT 1 FROM bot_404_leads WHERE session_id=$1 AND tenant_id=$2 AND assigned_contact_id=$3 LIMIT 1",
+            session_id, sess["tenant_id"], sess["actor_id"],
+        )
+        if not allowed:
+            raise HTTPException(status_code=403, detail="not your conversation")
+    rows = await pool.fetch(
+        "SELECT direction, text, created_at FROM bot_404_log "
+        "WHERE session_id=$1 AND tenant_id=$2 ORDER BY id ASC LIMIT 500",
+        session_id, sess["tenant_id"],
+    )
+    return {"messages": [dict(r) for r in rows]}
+
+
+@app.get("/admin/api/embed/stats")
+async def embed_stats(request: Request):
+    """Статистика тенанта. Contact видит только счётчик своих открытых лидов; operator — сводную."""
+    sess = await _require_embed(request)
+    pool = await _b404_pool()
+    if sess["actor_type"] == "contact":
+        row = await pool.fetchrow(
+            """SELECT COUNT(*) FILTER (WHERE status IN ('new','in_progress')) AS my_active,
+                      COUNT(*) FILTER (WHERE status='client') AS my_deals
+                 FROM bot_404_leads
+                WHERE tenant_id=$1 AND assigned_contact_id=$2""",
+            sess["tenant_id"], sess["actor_id"],
+        )
+        return {"scope": "contact", "my_active": row[0], "my_deals": row[1]}
+    else:
+        row = await pool.fetchrow(
+            """SELECT COUNT(*) AS total,
+                      COUNT(*) FILTER (WHERE status='new') AS new_count,
+                      COUNT(*) FILTER (WHERE status='client') AS deals
+                 FROM bot_404_leads WHERE tenant_id=$1""",
+            sess["tenant_id"],
+        )
+        return {
+            "scope": "operator", "total": row[0],
+            "new_count": row[1], "deals": row[2],
+        }
+
+
+@app.get("/admin/api/embed/settings")
+async def embed_settings_get(request: Request):
+    """Настройки виджета — доступ только оператору. Contact получает 403."""
+    sess = await _require_embed(request)
+    if sess["actor_type"] != "operator":
+        raise HTTPException(status_code=403, detail="settings available for operators only")
+    pool = await _b404_pool()
+    row = await pool.fetchrow(
+        "SELECT * FROM v_tenant_branding WHERE tenant_id=$1", sess["tenant_id"]
+    )
+    return {"branding": dict(row) if row else None}
+
+
+@app.get("/admin/api/branding", dependencies=[Depends(_check_bot404)])
+async def get_branding(x_admin_token: str = Header(default="")):
+    pool = await _b404_pool()
+    tid = await _tenant_id_from_token(x_admin_token)
+    row = await pool.fetchrow("SELECT * FROM v_tenant_branding WHERE tenant_id=$1", tid)
+    if not row:
+        raise HTTPException(status_code=404, detail="tenant not found")
+    return {"branding": dict(row)}
+
+
+class _BrandingBody(_BaseModel):
+    brand_name: str | None = None
+    bot_name: str | None = None
+    role_subtitle: str | None = None
+    logo_url: str | None = None
+    primary_color: str | None = None
+    accent_color: str | None = None
+    text_color: str | None = None
+    greeting: str | None = None
+    nudge_text: str | None = None
+    chat_title: str | None = None
+    footer_text: str | None = None
+    manager_email: str | None = None
+    position: str | None = None
+
+
+@app.post("/admin/api/branding", dependencies=[Depends(_check_bot404_admin)])
+async def set_branding(body: _BrandingBody, x_admin_token: str = Header(default="")):
+    pool = await _b404_pool()
+    tid = await _tenant_id_from_token(x_admin_token)
+    tid_row = {"id": tid} if tid else None
+    if not tid_row:
+        raise HTTPException(status_code=404, detail="tenant not found")
+    tid = tid_row["id"]
+    await pool.execute("INSERT INTO tenant_branding(tenant_id) VALUES($1) ON CONFLICT (tenant_id) DO NOTHING", tid)
+    cols = ["brand_name","bot_name","role_subtitle","logo_url","primary_color","accent_color","text_color",
+            "greeting","nudge_text","chat_title","footer_text","manager_email","position"]
+    data = body.model_dump(exclude_none=False)
+    sets = []
+    params = []
+    i = 1
+    for c in cols:
+        v = data.get(c, None)
+        if v is None and c not in data:
+            continue
+        sets.append(f"{c}=${i}")
+        params.append(v if v != "" else None)
+        i += 1
+    if not sets:
+        return {"ok": True, "noop": True}
+    sets.append("updated_at=now()")
+    params.append(tid)
+    await pool.execute(f"UPDATE tenant_branding SET {', '.join(sets)} WHERE tenant_id=${i}", *params)
+    await _audit("branding.update", {k: v for k, v in data.items() if v is not None}, tid=tid)
+    return {"ok": True}
+
 
 
 # ── ЛК 404: Telegram-боты (CRUD) ─────────────────────────────────────────────
