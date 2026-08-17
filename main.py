@@ -284,21 +284,7 @@ if _widget_dir.exists():
 
 app.mount("/widget", StaticFiles(directory=str(_widget_dir)), name="widget")
 
-# PRM iframe SSO — модуль встраивания ЛК Дирижёра в PRM-платформы партнёров.
-# См. prm_iframe.py и supabase/prm_iframe_sso.sql.
-try:
-    from prm_iframe import (
-        router as _prm_router,
-        embed_router as _prm_embed_router,
-        whoami_router as _prm_whoami_router,
-        prm_csp_middleware as _prm_csp_middleware,
-    )
-    app.include_router(_prm_router)
-    app.include_router(_prm_embed_router)
-    app.include_router(_prm_whoami_router)
-    app.middleware("http")(_prm_csp_middleware)
-except Exception as _e:
-    print(f"[prm-iframe] not loaded: {_e}")
+# PRM iframe SSO v2 removed 2026-08-18 (заменён v1.1 через integrations)
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
 
