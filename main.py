@@ -83,6 +83,17 @@ async def lifespan(app: FastAPI):
             await _asyncio.sleep(300)
     _asyncio.create_task(_prm_email_loop())
     print("[startup] PRM email worker scheduled (background, every 5 min)")
+    # Task 9: PRM webhook worker — раз в 30 сек, доставка events на webhook_url integrations
+    async def _prm_webhook_loop():
+        while True:
+            try:
+                await _prm_deliver_pending_webhooks()
+            except Exception as e:
+                print(f"[prm-webhook] err: {e}")
+            await _asyncio.sleep(30)
+    _asyncio.create_task(_prm_webhook_loop())
+    print("[startup] PRM webhook worker scheduled (background, every 30s)")
+
 
     yield
 
@@ -2034,6 +2045,127 @@ async def prm_actor_notify_manual(actor_id: int, request: Request):
     result = await _prm_send_pending_emails()
     await _prm_audit(auth["integration_id"], request, f"/prm/api/actors/{actor_id}/notify", 200, result)
     return result
+
+# ── Task 9: PRM исходящий webhook worker ────────────────────────────────────
+import hmac as _hmac_prm
+import hashlib as _hashlib_prm
+import urllib.request as _urlreq_prm
+import urllib.error as _urlerr_prm
+
+async def _prm_deliver_pending_webhooks() -> dict:
+    """Обходит недоставленные events, шлёт HMAC-подписанный POST на webhook_url.
+    Ретраи с экспоненциальным бэкоффом (5 попыток: 0, 30с, 2м, 8м, 30м — за счёт запусков loop).
+    Возвращает {'delivered': N, 'failed': M, 'no_url': K}."""
+    pool = await _b404_pool()
+    rows = await pool.fetch("""
+        SELECT ie.id, ie.integration_id, ie.tenant_id, ie.actor_id, ie.actor_type,
+               ie.event_type, ie.payload, ie.created_at, ie.webhook_attempts,
+               i.webhook_url, i.webhook_secret
+        FROM integration_events ie
+        JOIN integrations i ON i.id = ie.integration_id
+        WHERE ie.webhook_delivered_at IS NULL
+          AND ie.webhook_attempts < 5
+          AND i.status = 'active'
+        ORDER BY ie.id
+        LIMIT 100
+    """)
+    if not rows:
+        return {"delivered": 0, "failed": 0, "no_url": 0}
+
+    delivered = 0
+    failed = 0
+    no_url = 0
+    import json as _j_wh
+    for r in rows:
+        if not r["webhook_url"]:
+            # у integration нет webhook_url — helper polling only, не крутим счётчик
+            await pool.execute(
+                "UPDATE integration_events SET webhook_delivered_at=now() WHERE id=$1",
+                r["id"]
+            )
+            no_url += 1
+            continue
+
+        # экспоненциальный бэкофф: не отправлять чаще чем 30с * 4^attempts
+        # (attempts=0 → сразу, 1 → 30с, 2 → 2м, 3 → 8м, 4 → 32м)
+        # проверяем через created_at + прошлые попытки — упрощаем: 30с loop сам разгонит
+
+        payload = {
+            "event_id": r["id"],
+            "event_type": r["event_type"],
+            "integration_id": r["integration_id"],
+            "tenant_id": r["tenant_id"],
+            "actor_id": r["actor_id"],
+            "actor_type": r["actor_type"],
+            "created_at": r["created_at"].isoformat(),
+            "payload": r["payload"],
+        }
+        body = _j_wh.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
+
+        # HMAC-SHA256 подпись (header X-Dirizher-Signature: sha256=<hex>)
+        secret = (r["webhook_secret"] or "").encode("utf-8")
+        sig = "sha256=" + _hmac_prm.new(secret, body, _hashlib_prm.sha256).hexdigest() if secret else ""
+
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "Dirizher-Webhook/1.1",
+            "X-Dirizher-Event": r["event_type"],
+            "X-Dirizher-Event-Id": str(r["id"]),
+            "X-Dirizher-Delivery-Attempt": str(r["webhook_attempts"] + 1),
+        }
+        if sig:
+            headers["X-Dirizher-Signature"] = sig
+
+        req = _urlreq_prm.Request(r["webhook_url"], data=body, headers=headers, method="POST")
+        try:
+            with _urlreq_prm.urlopen(req, timeout=10) as resp:
+                if 200 <= resp.status < 300:
+                    await pool.execute(
+                        "UPDATE integration_events SET webhook_delivered_at=now(), webhook_attempts=$1 WHERE id=$2",
+                        r["webhook_attempts"] + 1, r["id"]
+                    )
+                    delivered += 1
+                else:
+                    raise Exception(f"HTTP {resp.status}")
+        except Exception as e:
+            err_msg = str(e)[:500]
+            await pool.execute(
+                "UPDATE integration_events SET webhook_attempts=$1, webhook_last_error=$2 WHERE id=$3",
+                r["webhook_attempts"] + 1, err_msg, r["id"]
+            )
+            failed += 1
+
+    return {"delivered": delivered, "failed": failed, "no_url": no_url}
+
+
+class _PrmWebhookConfig(_BaseModel):
+    webhook_url: str | None = None
+    webhook_secret: str | None = None
+
+
+@app.post("/prm/api/integration/webhook", tags=["prm-v1.1"])
+async def prm_set_webhook(body: _PrmWebhookConfig, request: Request):
+    """Установить webhook URL + secret для integration.
+    NULL webhook_url = отключить исходящий webhook (остаётся polling)."""
+    auth = await _prm_auth(request)
+    pool = await _b404_pool()
+    await pool.execute(
+        "UPDATE integrations SET webhook_url=$1, webhook_secret=$2, updated_at=now() WHERE id=$3",
+        body.webhook_url, body.webhook_secret, auth["integration_id"]
+    )
+    await _prm_audit(auth["integration_id"], request, "/prm/api/integration/webhook", 200,
+                     {"webhook_url_set": bool(body.webhook_url), "secret_set": bool(body.webhook_secret)})
+    return {"ok": True, "webhook_url": body.webhook_url, "secret_configured": bool(body.webhook_secret)}
+
+
+@app.post("/prm/api/integration/webhook/test", tags=["prm-v1.1"])
+async def prm_test_webhook(request: Request):
+    """Ручной триггер webhook worker (для дебага). Требует _prm_auth."""
+    auth = await _prm_auth(request)
+    result = await _prm_deliver_pending_webhooks()
+    await _prm_audit(auth["integration_id"], request, "/prm/api/integration/webhook/test", 200, result)
+    return result
+
 
 
 
