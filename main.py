@@ -73,6 +73,17 @@ async def lifespan(app: FastAPI):
             await _asyncio.sleep(3600)  # раз в час
     _asyncio.create_task(_prm_retention_loop())
     print("[startup] PRM retention worker scheduled (background, hourly)")
+    # Task 5: PRM email worker для offline-акторов — раз в 5 мин
+    async def _prm_email_loop():
+        while True:
+            try:
+                await _prm_send_pending_emails()
+            except Exception as e:
+                print(f"[prm-email] err: {e}")
+            await _asyncio.sleep(300)
+    _asyncio.create_task(_prm_email_loop())
+    print("[startup] PRM email worker scheduled (background, every 5 min)")
+
     yield
 
 
@@ -1908,6 +1919,137 @@ async def _prm_audit(integration_id: int, request: Request, path: str,
     except Exception as e:
         print(f"[prm-audit] {e}")
 
+# ── Task 5: PRM email worker (offline-акторы) ────────────────────────────────
+import smtplib as _smtplib_prm
+from email.message import EmailMessage as _EmailMessage_prm
+
+async def _prm_send_pending_emails() -> dict:
+    """Обходит новые события за последний час, шлёт batched email оффлайн-акторам.
+    Возвращает {'emails_sent': N, 'events_covered': M} для health/логов.
+    Silent no-op если SMTP не настроен."""
+    host = os.environ.get("SMTP_HOST", "").strip()
+    if not host:
+        return {"emails_sent": 0, "events_covered": 0, "reason": "SMTP_HOST not set"}
+    port = int(os.environ.get("SMTP_PORT", "587"))
+    user = os.environ.get("SMTP_USER", "").strip()
+    pw   = os.environ.get("SMTP_PASS", "").strip()
+    starttls = os.environ.get("SMTP_STARTTLS", "true").lower() != "false"
+    default_from = os.environ.get("SMTP_FROM", "no-reply@dirizher404.ru").strip()
+
+    pool = await _b404_pool()
+    rows = await pool.fetch("""
+        SELECT ie.integration_id, ie.actor_id, ie.actor_type, ie.tenant_id,
+               array_agg(ie.id ORDER BY ie.id) AS event_ids,
+               array_agg(ie.event_type ORDER BY ie.id) AS event_types,
+               array_agg(ie.payload::text ORDER BY ie.id) AS payloads,
+               COUNT(*) AS n
+        FROM integration_events ie
+        WHERE ie.email_sent_at IS NULL
+          AND ie.actor_id IS NOT NULL
+          AND ie.created_at > now() - interval '1 hour'
+        GROUP BY ie.integration_id, ie.actor_id, ie.actor_type, ie.tenant_id
+    """)
+    if not rows:
+        return {"emails_sent": 0, "events_covered": 0}
+
+    emails_sent = 0
+    events_covered = 0
+    for r in rows:
+        online = await pool.fetchval("""
+            SELECT COUNT(*) > 0 FROM embed_sessions
+            WHERE tenant_id=$1 AND actor_id=$2 AND actor_type=$3
+              AND (last_activity_at IS NULL OR last_activity_at > now() - interval '30 minutes')
+              AND revoked_at IS NULL AND expires_at > now()
+        """, r["tenant_id"], r["actor_id"], r["actor_type"])
+        if online:
+            await pool.execute(
+                "UPDATE integration_events SET email_sent_at=now() WHERE id = ANY($1)",
+                r["event_ids"]
+            )
+            events_covered += r["n"]
+            continue
+
+        table = ("tenant_operators" if r["actor_type"] == "operator"
+                 else "tenant_contacts" if r["actor_type"] == "contact"
+                 else None)
+        if not table:
+            await pool.execute(
+                "UPDATE integration_events SET email_sent_at=now() WHERE id = ANY($1)",
+                r["event_ids"]
+            )
+            events_covered += r["n"]
+            continue
+
+        actor = await pool.fetchrow(
+            f"SELECT email, name FROM {table} WHERE id=$1 AND active=true",
+            r["actor_id"]
+        )
+        if not actor or not actor["email"]:
+            await pool.execute(
+                "UPDATE integration_events SET email_sent_at=now() WHERE id = ANY($1)",
+                r["event_ids"]
+            )
+            events_covered += r["n"]
+            continue
+
+        integ = await pool.fetchrow(
+            "SELECT email_enabled, email_from FROM integrations WHERE id=$1",
+            r["integration_id"]
+        )
+        if integ and integ["email_enabled"] is False:
+            await pool.execute(
+                "UPDATE integration_events SET email_sent_at=now() WHERE id = ANY($1)",
+                r["event_ids"]
+            )
+            events_covered += r["n"]
+            continue
+
+        from_addr = (integ["email_from"] if integ and integ["email_from"] else default_from)
+
+        lines = [f"Здравствуйте, {actor['name'] or ''}!", "",
+                 f"В системе появились новые события ({r['n']} шт):"]
+        for et, pl in zip(r["event_types"], r["payloads"]):
+            lines.append(f"  • {et}: {pl}")
+        lines += ["", "Войдите в панель, чтобы посмотреть подробнее.", "", "— Дирижёр"]
+        text = "\n".join(lines)
+        subject = f"Дирижёр: {r['n']} новых событий в вашем аккаунте"
+
+        try:
+            msg = _EmailMessage_prm()
+            msg["From"] = from_addr
+            msg["To"] = actor["email"]
+            msg["Subject"] = subject
+            msg.set_content(text)
+            if starttls:
+                with _smtplib_prm.SMTP(host, port, timeout=15) as s:
+                    s.starttls()
+                    if user: s.login(user, pw)
+                    s.send_message(msg)
+            else:
+                with _smtplib_prm.SMTP_SSL(host, port, timeout=15) as s:
+                    if user: s.login(user, pw)
+                    s.send_message(msg)
+            emails_sent += 1
+            events_covered += r["n"]
+            await pool.execute(
+                "UPDATE integration_events SET email_sent_at=now() WHERE id = ANY($1)",
+                r["event_ids"]
+            )
+        except Exception as e:
+            print(f"[prm-email] send fail to {actor['email']}: {e}")
+
+    return {"emails_sent": emails_sent, "events_covered": events_covered}
+
+
+@app.post("/prm/api/actors/{actor_id}/notify", tags=["prm-v1.1"])
+async def prm_actor_notify_manual(actor_id: int, request: Request):
+    """Ручной триггер email-worker (для тестов). Требует _prm_auth."""
+    auth = await _prm_auth(request)
+    result = await _prm_send_pending_emails()
+    await _prm_audit(auth["integration_id"], request, f"/prm/api/actors/{actor_id}/notify", 200, result)
+    return result
+
+
 
 # ── /prm/api/tenants — компания-клиент, upsert по external_id ───────────────
 class _PrmTenantBody(_BaseModel):
@@ -2016,6 +2158,8 @@ class _PrmActorBody(_BaseModel):
     name: str | None = None
     role: str | None = "admin"
     perms: dict | None = None
+    # Task 4 (v1.2): parent_contact_id для sub-partners
+    parent_external_id: str | None = None
 
 
 @app.post("/prm/api/tenants/{tenant_id}/operators")
@@ -2073,17 +2217,40 @@ async def prm_create_contact(tenant_id: int, body: _PrmActorBody, request: Reque
         tenant_id, body.external_id
     )
     if row:
+        # Task 4: обновляем parent_contact_id если задан parent_external_id
+        parent_id = None
+        if body.parent_external_id:
+            parent_id = await pool.fetchval(
+                "SELECT id FROM tenant_contacts WHERE tenant_id=$1 AND external_id=$2",
+                tenant_id, body.parent_external_id
+            )
+            if parent_id is None:
+                raise HTTPException(status_code=400,
+                    detail=f"parent contact {body.parent_external_id} not found in tenant {tenant_id}")
+            if parent_id == row["id"]:
+                raise HTTPException(status_code=400, detail="contact cannot be its own parent")
         await pool.execute(
-            "UPDATE tenant_contacts SET email=COALESCE($1,email), name=COALESCE($2,name), active=true WHERE id=$3",
-            body.email, body.name, row["id"]
+            "UPDATE tenant_contacts SET email=COALESCE($1,email), name=COALESCE($2,name), active=true, "
+            "parent_contact_id=COALESCE($3, parent_contact_id) WHERE id=$4",
+            body.email, body.name, parent_id, row["id"]
         )
         cid = row["id"]
         created = False
     else:
+        # Task 4: резолв parent_contact_id по внешнему id
+        parent_id = None
+        if body.parent_external_id:
+            parent_id = await pool.fetchval(
+                "SELECT id FROM tenant_contacts WHERE tenant_id=$1 AND external_id=$2",
+                tenant_id, body.parent_external_id
+            )
+            if parent_id is None:
+                raise HTTPException(status_code=400,
+                    detail=f"parent contact {body.parent_external_id} not found in tenant {tenant_id}")
         cid = await pool.fetchval(
-            "INSERT INTO tenant_contacts (tenant_id, external_id, email, name) "
-            "VALUES ($1, $2, $3, $4) RETURNING id",
-            tenant_id, body.external_id, body.email, body.name
+            "INSERT INTO tenant_contacts (tenant_id, external_id, email, name, parent_contact_id) "
+            "VALUES ($1, $2, $3, $4, $5) RETURNING id",
+            tenant_id, body.external_id, body.email, body.name, parent_id
         )
         created = True
     await _prm_audit(auth["integration_id"], request, f"/prm/api/tenants/{tenant_id}/contacts", 200,
@@ -2102,8 +2269,8 @@ class _PrmEmbedSessionBody(_BaseModel):
 @app.post("/prm/api/embed-session")
 async def prm_embed_session(body: _PrmEmbedSessionBody, request: Request):
     auth = await _prm_auth(request)
-    if body.actor_type not in ("operator", "contact"):
-        raise HTTPException(status_code=400, detail="actor_type must be 'operator' or 'contact'")
+    if body.actor_type not in ("operator", "contact", "super_admin"):
+        raise HTTPException(status_code=400, detail="actor_type must be 'operator', 'contact' or 'super_admin'")
     ttl = max(30, min(120, body.ttl or 60))
     pool = await _b404_pool()
     # проверяем tenant
@@ -2115,24 +2282,34 @@ async def prm_embed_session(body: _PrmEmbedSessionBody, request: Request):
         raise HTTPException(status_code=404, detail="tenant not found")
     if t["status"] != "active":
         raise HTTPException(status_code=403, detail=f"tenant status={t['status']}")
-    # ищем актера
-    table = "tenant_operators" if body.actor_type == "operator" else "tenant_contacts"
-    actor = await pool.fetchrow(
-        f"SELECT id, active FROM {table} WHERE tenant_id=$1 AND external_id=$2",
-        body.tenant_id, body.actor_external_id
-    )
-    if not actor:
-        raise HTTPException(status_code=404, detail=f"{body.actor_type} not found")
-    if not actor["active"]:
-        raise HTTPException(status_code=403, detail=f"{body.actor_type} inactive")
+    # ищем актера (super_admin — global scope integration, без tenant-actor)
+    if body.actor_type == "super_admin":
+        # super_admin: actor_id используется как integration_id (маркер scope);
+        # perms сохраняются в embed_sessions.perms = {scope: integration, integration_id}
+        actor_id = auth["integration_id"]
+        _sa_perms = {"scope": "integration", "integration_id": auth["integration_id"]}
+    else:
+        table = "tenant_operators" if body.actor_type == "operator" else "tenant_contacts"
+        actor = await pool.fetchrow(
+            f"SELECT id, active FROM {table} WHERE tenant_id=$1 AND external_id=$2",
+            body.tenant_id, body.actor_external_id
+        )
+        if not actor:
+            raise HTTPException(status_code=404, detail=f"{body.actor_type} not found")
+        if not actor["active"]:
+            raise HTTPException(status_code=403, detail=f"{body.actor_type} inactive")
+        actor_id = actor["id"]
+        _sa_perms = None
     # генерируем opaque-код и сохраняем
     code = _secrets_prm.token_hex(32)
     now = _dt_prm.datetime.now(_dt_prm.timezone.utc)
     expires = now + _dt_prm.timedelta(seconds=ttl)
+    import json as _j_prm
     await pool.execute(
-        "INSERT INTO embed_sessions (code, tenant_id, actor_id, actor_type, expires_at) "
-        "VALUES ($1, $2, $3, $4, $5)",
-        code, body.tenant_id, actor["id"], body.actor_type, expires
+        "INSERT INTO embed_sessions (code, tenant_id, actor_id, actor_type, perms, expires_at) "
+        "VALUES ($1, $2, $3, $4, $5::jsonb, $6)",
+        code, body.tenant_id, actor_id, body.actor_type,
+        (_j_prm.dumps(_sa_perms) if _sa_perms else None), expires
     )
     await _prm_audit(auth["integration_id"], request, "/prm/api/embed-session", 200,
                      {"tenant_id": body.tenant_id, "actor_type": body.actor_type,
@@ -2218,8 +2395,8 @@ async def prm_embed(code: str = _Form(...), mode: str = _Form("cookie"), request
 async def prm_revoke(actor_id: int, request: Request):
     auth = await _prm_auth(request)
     actor_type = request.query_params.get("actor_type", "operator")
-    if actor_type not in ("operator", "contact"):
-        raise HTTPException(status_code=400, detail="actor_type must be 'operator' or 'contact'")
+    if actor_type not in ("operator", "contact", "super_admin"):
+        raise HTTPException(status_code=400, detail="actor_type must be 'operator', 'contact' or 'super_admin'")
     pool = await _b404_pool()
     # revoke все активные embed_sessions этого актора в тенантах интеграции
     result = await pool.execute(
