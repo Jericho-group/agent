@@ -5350,6 +5350,7 @@ function adminApp() {
           sessionStorage.setItem('adminScope', this.scope);
           sessionStorage.setItem('adminTenantSlug', this.tenantSlug);
           if (this.scope === 'bot404') this.page = 'conversations';
+            else if (this.scope === 'prm') this.page = 'prm';
           this.theme = '404';
           this.loadBranding();
           this.loadAll();
@@ -6077,6 +6078,7 @@ function adminApp() {
           sessionStorage.setItem('adminTenantSlug', this.tenantSlug);
           sessionStorage.setItem('impInfo', JSON.stringify(this.impersonateInfo));
           if (this.scope === 'bot404') this.page = 'conversations';
+            else if (this.scope === 'prm') this.page = 'prm';
           this.theme = '404';
           this.loadAll();
           // убираем ?imp= из URL
