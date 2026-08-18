@@ -6121,6 +6121,7 @@ function adminApp() {
         if (p === 'usage')    this.loadUsage?.();
         if (p === 'audit')    this.loadAudit?.();
         if (p === 'team')     this.loadTeam?.();
+        if (p === 'prm')      this.loadPrm?.();
       });
       this.$watch('authenticated', v => { if (v) this.startPolling(); else this.stopPolling(); });
       // отслеживаем рост активных сессий → toast «новый лид»
