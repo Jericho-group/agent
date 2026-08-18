@@ -6153,7 +6153,7 @@ function adminApp() {
       const saved = sessionStorage.getItem('adminToken');
       const savedScope = sessionStorage.getItem('adminScope');
       const savedTenant = sessionStorage.getItem('adminTenantSlug');
-      if (saved && savedScope) { this.token = saved; this.scope = savedScope; this.tenantSlug = savedTenant || ''; this.authenticated = true; if (this.scope==='bot404') this.page='conversations'; this.theme='404'; this.loadBranding?.(); this.loadAll(); }
+      if (saved && savedScope) { this.token = saved; this.scope = savedScope; this.tenantSlug = savedTenant || ''; this.authenticated = true; if (this.scope==='bot404') this.page='conversations'; else if (this.scope==='prm') this.page='prm'; this.theme='404'; this.loadBranding?.(); this.loadAll(); }
       else { try { sessionStorage.removeItem('adminToken'); sessionStorage.removeItem('adminScope'); sessionStorage.removeItem('adminTenantSlug'); sessionStorage.removeItem('impInfo'); } catch(e) {} }
       this.$watch('page', p => {
         if (p === 'conversations') this.loadSessions();
