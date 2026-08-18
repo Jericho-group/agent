@@ -4238,6 +4238,16 @@ function adminApp() {
     prmData: { integrations: [], tenants: [], audit: [], events: [], workers: [], sessions: [] },
     prmOnlyErrors: false,
     get prmFiltered() { return this.prmOnlyErrors ? (this.prmData.audit || []).filter(a => a.status_code >= 400) : (this.prmData.audit || []); },
+    exitImpersonate() {
+      // Возврат в свой кабинет (Sergey PRM Dashboard)
+      // Восстанавливаем сохранённый scope+token из sessionStorage — они не удалялись
+      try { sessionStorage.removeItem('impInfo'); } catch(_){}
+      this.impersonateInfo = null;
+      this.isImpersonating = false;
+      // Перезагрузка — init подхватит сохранённый Sergey token
+      window.location.href = '/admin';
+    },
+
     async loginAsTenant(tid, slug) {
       try {
         const r = await fetch('/admin/api/prm/tenants/' + tid + '/impersonate', {method:'POST', headers: this.h()});
