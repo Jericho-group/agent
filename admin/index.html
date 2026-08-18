@@ -1592,9 +1592,9 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
         от имени <span x-text="impersonateInfo?.root_email"></span>.
         Все ваши действия логируются.
       </div>
-      <button @click="logout()"
+      <button @click="exitImpersonate()"
               class="px-3 py-1.5 rounded-[10px] text-[12px] font-semibold"
-              style="background:#7A5A0A; color:#FFF;">Выйти из режима</button>
+              style="background:#7A5A0A; color:#FFF;">← Вернуться в свой кабинет</button>
     </div>
 
     <!-- Top bar -->
@@ -4239,6 +4239,8 @@ function adminApp() {
     prmOnlyErrors: false,
     get prmFiltered() { return this.prmOnlyErrors ? (this.prmData.audit || []).filter(a => a.status_code >= 400) : (this.prmData.audit || []); },
     exitImpersonate() {
+      // Если не в impersonate — обычный полный logout
+      if (!this.isImpersonating) { this.logout(); return; }
       // Восстановить сохранённый Sergey/root state из _prmReturn
       try {
         const saved = sessionStorage.getItem('_prmReturn');
