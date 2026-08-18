@@ -4156,14 +4156,14 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
           </div>
         </div>
         <div x-show="prmTab==='overview'" class="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold text-emerald-600" x-text="prmData.integrations.length"></div><div class="text-xs uppercase" style="color:#6E6E76;">Integrations</div></div>
-          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold text-emerald-600" x-text="prmData.tenants.length"></div><div class="text-xs uppercase" style="color:#6E6E76;">Тенантов PRM</div></div>
-          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold text-emerald-600" x-text="prmData.sessions.length"></div><div class="text-xs uppercase" style="color:#6E6E76;">Активн. сессий</div></div>
-          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold text-emerald-600" x-text="prmData.events.length"></div><div class="text-xs uppercase" style="color:#6E6E76;">События (7д)</div></div>
-          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold" :class="(prmData.audit.filter(a=>a.status_code>=500).length||0) > 0 ? 'text-red-600' : 'text-emerald-600'" x-text="prmData.audit.filter(a=>a.status_code>=500).length"></div><div class="text-xs uppercase" style="color:#6E6E76;">5xx</div></div>
-          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold text-amber-600" x-text="prmData.audit.filter(a=>a.status_code>=400&&a.status_code<500).length"></div><div class="text-xs uppercase" style="color:#6E6E76;">4xx</div></div>
-          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold text-emerald-600" x-text="prmData.audit.filter(a=>a.status_code>=200&&a.status_code<300).length"></div><div class="text-xs uppercase" style="color:#6E6E76;">2xx</div></div>
-          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold text-emerald-600" x-text="prmData.workers.length"></div><div class="text-xs uppercase" style="color:#6E6E76;">Workers 24ч</div></div>
+          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold text-emerald-600" x-text="prmData.integrations.length"></div><div class="text-xs uppercase" style="color:#6E6E76;">Интеграции</div></div>
+          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold text-emerald-600" x-text="prmData.tenants.length"></div><div class="text-xs uppercase" style="color:#6E6E76;">Тенантов</div></div>
+          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold text-emerald-600" x-text="prmData.sessions.length"></div><div class="text-xs uppercase" style="color:#6E6E76;">Активных сессий</div></div>
+          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold text-emerald-600" x-text="prmData.events.length"></div><div class="text-xs uppercase" style="color:#6E6E76;">События за 7 дней</div></div>
+          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold" :class="(prmData.audit.filter(a=>a.status_code>=500).length||0) > 0 ? 'text-red-600' : 'text-emerald-600'" x-text="prmData.audit.filter(a=>a.status_code>=500).length"></div><div class="text-xs uppercase" style="color:#6E6E76;">Ошибок 5xx</div></div>
+          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold text-amber-600" x-text="prmData.audit.filter(a=>a.status_code>=400&&a.status_code<500).length"></div><div class="text-xs uppercase" style="color:#6E6E76;">Ошибок 4xx</div></div>
+          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold text-emerald-600" x-text="prmData.audit.filter(a=>a.status_code>=200&&a.status_code<300).length"></div><div class="text-xs uppercase" style="color:#6E6E76;">Успешных 2xx</div></div>
+          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold text-emerald-600" x-text="prmData.workers.length"></div><div class="text-xs uppercase" style="color:#6E6E76;">Воркеры за 24 часа</div></div>
         </div>
         <div x-show="prmTab==='tenants'" class="bg-white border rounded overflow-x-auto">
           <table class="min-w-full text-xs">
