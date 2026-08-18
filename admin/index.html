@@ -4138,6 +4138,67 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
         </div>
       </div><!-- /team -->
 
+          <!-- ── Task 15: PRM Integrations Dashboard (scope=bot404 only) ─────── -->
+      <div x-show="page==='prm' && (scope==='bot404' || scope==='full')" x-init="if(authenticated && page==='prm')loadPrm()" class="p-6 space-y-4" style="min-height:calc(100vh - 100px);">
+        <div class="flex items-center justify-between">
+          <div>
+            <h2 class="text-lg font-semibold">PRM интеграции</h2>
+            <p class="text-xs" style="color:#6E6E76;">Мониторинг партнёр-релейшн-платформ (PRM Online и др.)</p>
+          </div>
+          <div class="flex gap-1">
+            <button @click="prmTab='overview'" :class="prmTab==='overview' ? 'bg-emerald-600 text-white' : 'bg-gray-100'" class="text-xs px-3 py-1.5 rounded">Обзор</button>
+            <button @click="prmTab='tenants'" :class="prmTab==='tenants' ? 'bg-emerald-600 text-white' : 'bg-gray-100'" class="text-xs px-3 py-1.5 rounded">Тенанты</button>
+            <button @click="prmTab='audit'" :class="prmTab==='audit' ? 'bg-emerald-600 text-white' : 'bg-gray-100'" class="text-xs px-3 py-1.5 rounded">Аудит</button>
+            <button @click="prmTab='events'" :class="prmTab==='events' ? 'bg-emerald-600 text-white' : 'bg-gray-100'" class="text-xs px-3 py-1.5 rounded">События</button>
+            <button @click="prmTab='workers'" :class="prmTab==='workers' ? 'bg-emerald-600 text-white' : 'bg-gray-100'" class="text-xs px-3 py-1.5 rounded">Workers</button>
+            <button @click="loadPrm()" class="text-xs px-3 py-1.5 rounded bg-gray-100">🔄</button>
+          </div>
+        </div>
+        <div x-show="prmTab==='overview'" class="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold text-emerald-600" x-text="prmData.integrations.length"></div><div class="text-xs uppercase" style="color:#6E6E76;">Integrations</div></div>
+          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold text-emerald-600" x-text="prmData.tenants.length"></div><div class="text-xs uppercase" style="color:#6E6E76;">Тенантов PRM</div></div>
+          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold text-emerald-600" x-text="prmData.sessions.length"></div><div class="text-xs uppercase" style="color:#6E6E76;">Активн. сессий</div></div>
+          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold text-emerald-600" x-text="prmData.events.length"></div><div class="text-xs uppercase" style="color:#6E6E76;">События (7д)</div></div>
+          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold" :class="(prmData.audit.filter(a=>a.status_code>=500).length||0) > 0 ? 'text-red-600' : 'text-emerald-600'" x-text="prmData.audit.filter(a=>a.status_code>=500).length"></div><div class="text-xs uppercase" style="color:#6E6E76;">5xx</div></div>
+          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold text-amber-600" x-text="prmData.audit.filter(a=>a.status_code>=400&&a.status_code<500).length"></div><div class="text-xs uppercase" style="color:#6E6E76;">4xx</div></div>
+          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold text-emerald-600" x-text="prmData.audit.filter(a=>a.status_code>=200&&a.status_code<300).length"></div><div class="text-xs uppercase" style="color:#6E6E76;">2xx</div></div>
+          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold text-emerald-600" x-text="prmData.workers.length"></div><div class="text-xs uppercase" style="color:#6E6E76;">Workers 24ч</div></div>
+        </div>
+        <div x-show="prmTab==='tenants'" class="bg-white border rounded overflow-x-auto">
+          <table class="min-w-full text-xs">
+            <thead style="background:#F9FAFB;"><tr class="text-left uppercase" style="color:#6E6E76;"><th class="px-3 py-2">id</th><th class="px-3 py-2">slug</th><th class="px-3 py-2">name</th><th class="px-3 py-2">external_id</th><th class="px-3 py-2">status</th><th class="px-3 py-2">лиды</th><th class="px-3 py-2">ops</th><th class="px-3 py-2">contacts</th><th class="px-3 py-2">сессий</th></tr></thead>
+            <tbody>
+              <template x-for="t in prmData.tenants" :key="t.id"><tr class="border-t"><td class="px-3 py-2" x-text="t.id"></td><td class="px-3 py-2 font-mono" x-text="t.slug"></td><td class="px-3 py-2" x-text="t.name"></td><td class="px-3 py-2 font-mono" x-text="t.external_id"></td><td class="px-3 py-2" x-text="t.status"></td><td class="px-3 py-2" x-text="t.leads_count"></td><td class="px-3 py-2" x-text="t.ops_count"></td><td class="px-3 py-2" x-text="t.contacts_count"></td><td class="px-3 py-2" x-text="t.active_sessions"></td></tr></template>
+            </tbody>
+          </table>
+        </div>
+        <div x-show="prmTab==='audit'" class="bg-white border rounded overflow-x-auto">
+          <div class="p-3 border-b"><label class="text-xs"><input type="checkbox" x-model="prmOnlyErrors"> Только ошибки</label></div>
+          <table class="min-w-full text-xs">
+            <thead style="background:#F9FAFB;"><tr class="text-left uppercase" style="color:#6E6E76;"><th class="px-3 py-2">time</th><th class="px-3 py-2">ip</th><th class="px-3 py-2">method</th><th class="px-3 py-2">path</th><th class="px-3 py-2">status</th></tr></thead>
+            <tbody>
+              <template x-for="a in prmFiltered" :key="a.id"><tr class="border-t"><td class="px-3 py-2" x-text="fmtT(a.ts)"></td><td class="px-3 py-2 font-mono" x-text="a.actor_ip"></td><td class="px-3 py-2 font-mono" x-text="a.method"></td><td class="px-3 py-2 font-mono" x-text="a.path"></td><td class="px-3 py-2 font-bold" :class="a.status_code>=500 ? 'text-red-600' : a.status_code>=400 ? 'text-amber-600' : 'text-emerald-600'" x-text="a.status_code"></td></tr></template>
+            </tbody>
+          </table>
+        </div>
+        <div x-show="prmTab==='events'" class="bg-white border rounded overflow-x-auto">
+          <table class="min-w-full text-xs">
+            <thead style="background:#F9FAFB;"><tr class="text-left uppercase" style="color:#6E6E76;"><th class="px-3 py-2">time</th><th class="px-3 py-2">tenant</th><th class="px-3 py-2">actor</th><th class="px-3 py-2">event</th><th class="px-3 py-2">webhook</th><th class="px-3 py-2">email</th></tr></thead>
+            <tbody>
+              <template x-for="e in prmData.events" :key="e.id"><tr class="border-t"><td class="px-3 py-2" x-text="fmtT(e.created_at)"></td><td class="px-3 py-2" x-text="e.tenant_id"></td><td class="px-3 py-2" x-text="(e.actor_type||'—')+':'+(e.actor_id||'—')"></td><td class="px-3 py-2 font-bold" x-text="e.event_type"></td><td class="px-3 py-2" x-text="e.webhook_delivered_at ? '✓ '+e.webhook_attempts : (e.webhook_attempts>=5 ? '✗ failed' : 'pending')"></td><td class="px-3 py-2" x-text="e.email_sent_at ? '✓' : 'pending'"></td></tr></template>
+            </tbody>
+          </table>
+        </div>
+        <div x-show="prmTab==='workers'" class="bg-white border rounded overflow-x-auto">
+          <table class="min-w-full text-xs">
+            <thead style="background:#F9FAFB;"><tr class="text-left uppercase" style="color:#6E6E76;"><th class="px-3 py-2">time</th><th class="px-3 py-2">worker</th><th class="px-3 py-2">ok</th><th class="px-3 py-2">duration</th><th class="px-3 py-2">result</th></tr></thead>
+            <tbody>
+              <template x-for="w in prmData.workers" :key="w.id"><tr class="border-t"><td class="px-3 py-2" x-text="fmtT(w.started_at)"></td><td class="px-3 py-2 font-bold" x-text="w.worker"></td><td class="px-3 py-2" :class="w.ok ? 'text-emerald-600' : 'text-red-600'" x-text="w.ok ? '✓' : '✗'"></td><td class="px-3 py-2" x-text="Math.round(w.duration_ms||0)+' ms'"></td><td class="px-3 py-2 font-mono text-[10px]" x-text="JSON.stringify(w.result||{}).slice(0,150)"></td></tr></template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
     </div><!-- /pages -->
   </div><!-- /content -->
 </div><!-- /main panel -->
@@ -4177,7 +4238,7 @@ function adminApp() {
     prmOnlyErrors: false,
     get prmFiltered() { return this.prmOnlyErrors ? (this.prmData.audit || []).filter(a => a.status_code >= 400) : (this.prmData.audit || []); },
     async loadPrm() {
-      if (this.scope !== 'bot404') return;
+      if (this.scope !== 'bot404' && this.scope !== 'full') return;
       try {
         const [ints, aud, evs, wrs, ses] = await Promise.all([
           fetch('/admin/api/prm/integrations', { headers: this.h() }).then(r => r.json()),
@@ -6205,65 +6266,5 @@ function adminApp() {
   }
 </style>
 
-      <!-- ── Task 15: PRM Integrations Dashboard (scope=bot404 only) ─────── -->
-      <div x-show="page==='prm' && (scope==='bot404' || scope==='full')" x-init="if(authenticated && page==='prm')loadPrm()" class="p-6 space-y-4" style="min-height:calc(100vh - 100px);">
-        <div class="flex items-center justify-between">
-          <div>
-            <h2 class="text-lg font-semibold">PRM интеграции</h2>
-            <p class="text-xs" style="color:#6E6E76;">Мониторинг партнёр-релейшн-платформ (PRM Online и др.)</p>
-          </div>
-          <div class="flex gap-1">
-            <button @click="prmTab='overview'" :class="prmTab==='overview' ? 'bg-emerald-600 text-white' : 'bg-gray-100'" class="text-xs px-3 py-1.5 rounded">Обзор</button>
-            <button @click="prmTab='tenants'" :class="prmTab==='tenants' ? 'bg-emerald-600 text-white' : 'bg-gray-100'" class="text-xs px-3 py-1.5 rounded">Тенанты</button>
-            <button @click="prmTab='audit'" :class="prmTab==='audit' ? 'bg-emerald-600 text-white' : 'bg-gray-100'" class="text-xs px-3 py-1.5 rounded">Аудит</button>
-            <button @click="prmTab='events'" :class="prmTab==='events' ? 'bg-emerald-600 text-white' : 'bg-gray-100'" class="text-xs px-3 py-1.5 rounded">События</button>
-            <button @click="prmTab='workers'" :class="prmTab==='workers' ? 'bg-emerald-600 text-white' : 'bg-gray-100'" class="text-xs px-3 py-1.5 rounded">Workers</button>
-            <button @click="loadPrm()" class="text-xs px-3 py-1.5 rounded bg-gray-100">🔄</button>
-          </div>
-        </div>
-        <div x-show="prmTab==='overview'" class="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold text-emerald-600" x-text="prmData.integrations.length"></div><div class="text-xs uppercase" style="color:#6E6E76;">Integrations</div></div>
-          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold text-emerald-600" x-text="prmData.tenants.length"></div><div class="text-xs uppercase" style="color:#6E6E76;">Тенантов PRM</div></div>
-          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold text-emerald-600" x-text="prmData.sessions.length"></div><div class="text-xs uppercase" style="color:#6E6E76;">Активн. сессий</div></div>
-          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold text-emerald-600" x-text="prmData.events.length"></div><div class="text-xs uppercase" style="color:#6E6E76;">События (7д)</div></div>
-          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold" :class="(prmData.audit.filter(a=>a.status_code>=500).length||0) > 0 ? 'text-red-600' : 'text-emerald-600'" x-text="prmData.audit.filter(a=>a.status_code>=500).length"></div><div class="text-xs uppercase" style="color:#6E6E76;">5xx</div></div>
-          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold text-amber-600" x-text="prmData.audit.filter(a=>a.status_code>=400&&a.status_code<500).length"></div><div class="text-xs uppercase" style="color:#6E6E76;">4xx</div></div>
-          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold text-emerald-600" x-text="prmData.audit.filter(a=>a.status_code>=200&&a.status_code<300).length"></div><div class="text-xs uppercase" style="color:#6E6E76;">2xx</div></div>
-          <div class="bg-white border rounded p-3"><div class="text-2xl font-bold text-emerald-600" x-text="prmData.workers.length"></div><div class="text-xs uppercase" style="color:#6E6E76;">Workers 24ч</div></div>
-        </div>
-        <div x-show="prmTab==='tenants'" class="bg-white border rounded overflow-x-auto">
-          <table class="min-w-full text-xs">
-            <thead style="background:#F9FAFB;"><tr class="text-left uppercase" style="color:#6E6E76;"><th class="px-3 py-2">id</th><th class="px-3 py-2">slug</th><th class="px-3 py-2">name</th><th class="px-3 py-2">external_id</th><th class="px-3 py-2">status</th><th class="px-3 py-2">лиды</th><th class="px-3 py-2">ops</th><th class="px-3 py-2">contacts</th><th class="px-3 py-2">сессий</th></tr></thead>
-            <tbody>
-              <template x-for="t in prmData.tenants" :key="t.id"><tr class="border-t"><td class="px-3 py-2" x-text="t.id"></td><td class="px-3 py-2 font-mono" x-text="t.slug"></td><td class="px-3 py-2" x-text="t.name"></td><td class="px-3 py-2 font-mono" x-text="t.external_id"></td><td class="px-3 py-2" x-text="t.status"></td><td class="px-3 py-2" x-text="t.leads_count"></td><td class="px-3 py-2" x-text="t.ops_count"></td><td class="px-3 py-2" x-text="t.contacts_count"></td><td class="px-3 py-2" x-text="t.active_sessions"></td></tr></template>
-            </tbody>
-          </table>
-        </div>
-        <div x-show="prmTab==='audit'" class="bg-white border rounded overflow-x-auto">
-          <div class="p-3 border-b"><label class="text-xs"><input type="checkbox" x-model="prmOnlyErrors"> Только ошибки</label></div>
-          <table class="min-w-full text-xs">
-            <thead style="background:#F9FAFB;"><tr class="text-left uppercase" style="color:#6E6E76;"><th class="px-3 py-2">time</th><th class="px-3 py-2">ip</th><th class="px-3 py-2">method</th><th class="px-3 py-2">path</th><th class="px-3 py-2">status</th></tr></thead>
-            <tbody>
-              <template x-for="a in prmFiltered" :key="a.id"><tr class="border-t"><td class="px-3 py-2" x-text="fmtT(a.ts)"></td><td class="px-3 py-2 font-mono" x-text="a.actor_ip"></td><td class="px-3 py-2 font-mono" x-text="a.method"></td><td class="px-3 py-2 font-mono" x-text="a.path"></td><td class="px-3 py-2 font-bold" :class="a.status_code>=500 ? 'text-red-600' : a.status_code>=400 ? 'text-amber-600' : 'text-emerald-600'" x-text="a.status_code"></td></tr></template>
-            </tbody>
-          </table>
-        </div>
-        <div x-show="prmTab==='events'" class="bg-white border rounded overflow-x-auto">
-          <table class="min-w-full text-xs">
-            <thead style="background:#F9FAFB;"><tr class="text-left uppercase" style="color:#6E6E76;"><th class="px-3 py-2">time</th><th class="px-3 py-2">tenant</th><th class="px-3 py-2">actor</th><th class="px-3 py-2">event</th><th class="px-3 py-2">webhook</th><th class="px-3 py-2">email</th></tr></thead>
-            <tbody>
-              <template x-for="e in prmData.events" :key="e.id"><tr class="border-t"><td class="px-3 py-2" x-text="fmtT(e.created_at)"></td><td class="px-3 py-2" x-text="e.tenant_id"></td><td class="px-3 py-2" x-text="(e.actor_type||'—')+':'+(e.actor_id||'—')"></td><td class="px-3 py-2 font-bold" x-text="e.event_type"></td><td class="px-3 py-2" x-text="e.webhook_delivered_at ? '✓ '+e.webhook_attempts : (e.webhook_attempts>=5 ? '✗ failed' : 'pending')"></td><td class="px-3 py-2" x-text="e.email_sent_at ? '✓' : 'pending'"></td></tr></template>
-            </tbody>
-          </table>
-        </div>
-        <div x-show="prmTab==='workers'" class="bg-white border rounded overflow-x-auto">
-          <table class="min-w-full text-xs">
-            <thead style="background:#F9FAFB;"><tr class="text-left uppercase" style="color:#6E6E76;"><th class="px-3 py-2">time</th><th class="px-3 py-2">worker</th><th class="px-3 py-2">ok</th><th class="px-3 py-2">duration</th><th class="px-3 py-2">result</th></tr></thead>
-            <tbody>
-              <template x-for="w in prmData.workers" :key="w.id"><tr class="border-t"><td class="px-3 py-2" x-text="fmtT(w.started_at)"></td><td class="px-3 py-2 font-bold" x-text="w.worker"></td><td class="px-3 py-2" :class="w.ok ? 'text-emerald-600' : 'text-red-600'" x-text="w.ok ? '✓' : '✗'"></td><td class="px-3 py-2" x-text="Math.round(w.duration_ms||0)+' ms'"></td><td class="px-3 py-2 font-mono text-[10px]" x-text="JSON.stringify(w.result||{}).slice(0,150)"></td></tr></template>
-            </tbody>
-          </table>
-        </div>
-      </div>
 </body>
 </html>
