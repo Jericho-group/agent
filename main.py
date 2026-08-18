@@ -321,6 +321,11 @@ if _widget_dir.exists():
 
 app.mount("/widget", StaticFiles(directory=str(_widget_dir)), name="widget")
 
+# Task 15: static admin/ файлы (prm-dashboard.html и др. кроме index.html)
+_admin_dir = Path(__file__).parent / "admin"
+if _admin_dir.exists():
+    app.mount("/admin/static", StaticFiles(directory=str(_admin_dir)), name="admin_static")
+
 # PRM iframe SSO v2 removed 2026-08-18 (заменён v1.1 через integrations)
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
