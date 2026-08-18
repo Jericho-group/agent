@@ -1465,7 +1465,7 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
 /* ===== THEME-404 END ===== */
   </style>
 </head>
-<body class="h-full" x-data="adminApp()" x-cloak
+<body class="h-full" x-data="adminApp()" x-cloak :style="isImpersonating ? 'padding-top:52px;' : ''"
       :class="theme==='404' ? 'theme-404 bg-[#F4F5F3]' : (theme==='brutal' ? 'theme-brutal' : (theme==='dark' ? 'theme-dark bg-slate-50' : 'theme-sf bg-[#f3f3f3]'))">
 
 <!-- ═══ LOGIN ═══════════════════════════════════════════════════════════════ -->
@@ -1584,8 +1584,8 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
   <!-- Content -->
   <div class="flex-1 flex flex-col overflow-hidden">
     <!-- Impersonation banner -->
-    <div x-show="isImpersonating" class="flex-shrink-0 flex items-center gap-3 px-6 py-2.5"
-         style="background:linear-gradient(90deg,#FFF1D8,#FFEDC0); border-bottom:1px solid #F0CF7A; color:#7A5A0A;">
+    <div x-show="isImpersonating" class="flex items-center gap-3 px-6 py-3"
+         style="position:fixed; top:0; left:0; right:0; z-index:9999; background:linear-gradient(90deg,#FF9800,#F57C00); color:#FFF; box-shadow:0 4px 12px rgba(0,0,0,0.2); font-weight:500;">
       <span style="font-size:18px;">👤</span>
       <div class="flex-1 text-[13px]">
         Вы зашли как <b x-text="impersonateInfo?.target_slug"></b>
