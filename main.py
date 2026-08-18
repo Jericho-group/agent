@@ -696,6 +696,57 @@ def _login_ratelimit(req: Request) -> None:
     dq.append(now)
 
 
+# Task 16: Impersonate для prm_admin — Sergey может проваливаться в клиентов
+# integration=1 (не в Зарю/Мошкову). Использует ту же imp-инфру что root в bot404.
+@app.post("/admin/api/prm/tenants/{tenant_id}/impersonate", dependencies=[Depends(_check_bot404_admin)])
+async def admin_prm_impersonate(tenant_id: int, request: Request):
+    """Выдать одноразовый imp-токен для входа как этот тенант.
+    Для scope='prm' — только тенанты своего integration_id (сейчас захардкожено =1)."""
+    # extract JWT claims
+    tok = request.headers.get("x-admin-token", "")
+    claims = _decode_jwt(tok) if tok else None
+    scope = (claims or {}).get("scope", "")
+    role = (claims or {}).get("role", "")
+    email = (claims or {}).get("email", "")
+
+    pool = await _b404_pool()
+    t = await pool.fetchrow("SELECT id, slug, parent_integration_id FROM tenants WHERE id=$1", tenant_id)
+    if not t:
+        raise HTTPException(status_code=404, detail="tenant not found")
+
+    # ограничение: prm_admin может impersonate только тенанты своего integration
+    if role == "prm_admin":
+        if t["parent_integration_id"] != 1:  # TODO: из user.integration_id когда добавим
+            raise HTTPException(status_code=403, detail="prm_admin может impersonate только тенанты своей integration")
+    # root — везде можно (уже покрыто _check_bot404_admin)
+
+    # Создаём imp-токен в Redis (та же схема что bot404: 'imp:<hex>' TTL 60s)
+    import redis.asyncio as _redis_prm
+    import os as _os_prm
+    import secrets as _sec_prm
+    import json as _j_prm
+    r = _redis_prm.from_url(_os_prm.environ.get("REDIS_URL", "redis://chatbot_redis:6379"))
+    token = _sec_prm.token_hex(32)
+    payload = _j_prm.dumps({
+        "target_slug": t["slug"],
+        "target_tenant_id": t["id"],
+        "root_email": email or "prm_admin",
+        "created_at": int(__import__("time").time() * 1000),
+    })
+    await r.set(f"imp:{token}", payload, ex=60)
+    await r.close()
+
+    await _prm_audit(1, request, f"/admin/api/prm/tenants/{tenant_id}/impersonate", 200,
+                     {"target_slug": t["slug"], "actor_email": email, "actor_role": role})
+
+    return {
+        "url": f"https://admin.dirizher404.ru/admin?imp={token}&slug={t['slug']}",
+        "token": token,
+        "ttl_sec": 60,
+        "target": t["slug"],
+    }
+
+
 @app.post("/admin/api/login")
 async def admin_login(body: _LoginBody, request: Request):
     _login_ratelimit(request)

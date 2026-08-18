@@ -4169,7 +4169,7 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
           <table class="min-w-full text-xs">
             <thead style="background:#F9FAFB;"><tr class="text-left uppercase" style="color:#6E6E76;"><th class="px-3 py-2">ID</th><th class="px-3 py-2">Slug</th><th class="px-3 py-2">Название</th><th class="px-3 py-2">External ID</th><th class="px-3 py-2">Статус</th><th class="px-3 py-2">Лиды</th><th class="px-3 py-2">Операторы</th><th class="px-3 py-2">Контакты</th><th class="px-3 py-2">Сессий</th></tr></thead>
             <tbody>
-              <template x-for="t in prmData.tenants" :key="t.id"><tr class="border-t"><td class="px-3 py-2" x-text="t.id"></td><td class="px-3 py-2 font-mono" x-text="t.slug"></td><td class="px-3 py-2" x-text="t.name"></td><td class="px-3 py-2 font-mono" x-text="t.external_id"></td><td class="px-3 py-2" x-text="t.status"></td><td class="px-3 py-2" x-text="t.leads_count"></td><td class="px-3 py-2" x-text="t.ops_count"></td><td class="px-3 py-2" x-text="t.contacts_count"></td><td class="px-3 py-2" x-text="t.active_sessions"></td></tr></template>
+              <template x-for="t in prmData.tenants" :key="t.id"><tr class="border-t"><td class="px-3 py-2" x-text="t.id"></td><td class="px-3 py-2 font-mono" x-text="t.slug"></td><td class="px-3 py-2" x-text="t.name"></td><td class="px-3 py-2 font-mono" x-text="t.external_id"></td><td class="px-3 py-2" x-text="t.status"></td><td class="px-3 py-2" x-text="t.leads_count"></td><td class="px-3 py-2" x-text="t.ops_count"></td><td class="px-3 py-2" x-text="t.contacts_count"></td><td class="px-3 py-2" x-text="t.active_sessions"></td><td class="px-3 py-2"><button @click="loginAsTenant(t.id, t.slug)" class="px-3 py-1 bg-emerald-600 text-white rounded text-[11px] hover:bg-emerald-700">Войти</button></td></tr></template>
             </tbody>
           </table>
         </div>
@@ -4238,6 +4238,16 @@ function adminApp() {
     prmData: { integrations: [], tenants: [], audit: [], events: [], workers: [], sessions: [] },
     prmOnlyErrors: false,
     get prmFiltered() { return this.prmOnlyErrors ? (this.prmData.audit || []).filter(a => a.status_code >= 400) : (this.prmData.audit || []); },
+    async loginAsTenant(tid, slug) {
+      try {
+        const r = await fetch('/admin/api/prm/tenants/' + tid + '/impersonate', {method:'POST', headers: this.h()});
+        if (!r.ok) { const e = await r.json(); throw new Error(e.detail || 'error'); }
+        const d = await r.json();
+        // Редирект в основной ЛК с imp токеном — tryImpersonateFromUrl() подхватит
+        window.location.href = d.url;
+      } catch(e) { alert('Ошибка входа: ' + e.message); }
+    },
+
     async loadPrm() {
       if (this.scope !== 'bot404' && this.scope !== 'full' && this.scope !== 'prm') return;
       try {
