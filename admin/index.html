@@ -1551,7 +1551,7 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
           <symbol id="ic-leads" viewBox="0 0 24 24"><path d="M20 7h-3V5a2 2 0 0 0-2-2H9a2 2 0 0 0-2 2v2H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V8a1 1 0 0 0-1-1zM9 5h6v2H9V5z"/></symbol>
         </defs>
       </svg>
-      <template x-for="item in (isEmbed ? navItems.filter(n => ['dashboard','conversations','leads','kb','branding','widget'].includes(n.id)) : navItems.filter(n => !n.scope404only || scope === 'bot404' || scope === 'full'))" :key="item.id">
+      <template x-for="item in (isEmbed ? navItems.filter(n => ['dashboard','conversations','leads','kb','branding','widget'].includes(n.id)) : (scope === 'prm' ? navItems.filter(n => n.id === 'prm') : navItems.filter(n => !n.scope404only || scope === 'full')))" :key="item.id">
         <button @click="page=item.id; sidebarOpen=false"
           :style="page===item.id?'background:#E3F5ED; color:#085041;':'color:#5A5A60;'"
           class="aisha-nav-btn w-full flex items-center gap-3 px-3 py-2.5 rounded-[10px] text-[13.5px] font-medium transition-all">
@@ -4140,7 +4140,7 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
       </div><!-- /team -->
 
           <!-- ── Task 15: PRM Integrations Dashboard (scope=bot404 only) ─────── -->
-      <div x-show="page==='prm' && (scope==='bot404' || scope==='full')" x-init="if(authenticated && page==='prm')loadPrm()" class="p-6 space-y-4" style="min-height:calc(100vh - 100px);">
+      <div x-show="page==='prm' && (scope==='full' || scope==='prm')" x-init="if(authenticated && page==='prm')loadPrm()" class="p-6 space-y-4" style="min-height:calc(100vh - 100px);">
         <div class="flex items-center justify-between">
           <div>
             <h2 class="text-lg font-semibold">PRM интеграции</h2>
@@ -4151,8 +4151,8 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
             <button @click="prmTab='tenants'" :class="prmTab==='tenants' ? 'bg-emerald-600 text-white' : 'bg-gray-100'" class="text-xs px-3 py-1.5 rounded">Тенанты</button>
             <button @click="prmTab='audit'" :class="prmTab==='audit' ? 'bg-emerald-600 text-white' : 'bg-gray-100'" class="text-xs px-3 py-1.5 rounded">Аудит</button>
             <button @click="prmTab='events'" :class="prmTab==='events' ? 'bg-emerald-600 text-white' : 'bg-gray-100'" class="text-xs px-3 py-1.5 rounded">События</button>
-            <button @click="prmTab='workers'" :class="prmTab==='workers' ? 'bg-emerald-600 text-white' : 'bg-gray-100'" class="text-xs px-3 py-1.5 rounded">Workers</button>
-            <button @click="loadPrm()" class="text-xs px-3 py-1.5 rounded bg-gray-100">🔄</button>
+            <button @click="prmTab='workers'" :class="prmTab==='workers' ? 'bg-emerald-600 text-white' : 'bg-gray-100'" class="text-xs px-3 py-1.5 rounded">Воркеры</button>
+            <button @click="loadPrm()" class="text-xs px-3 py-1.5 rounded bg-gray-100 hover:bg-gray-200">Обновить</button>
           </div>
         </div>
         <div x-show="prmTab==='overview'" class="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -4239,7 +4239,7 @@ function adminApp() {
     prmOnlyErrors: false,
     get prmFiltered() { return this.prmOnlyErrors ? (this.prmData.audit || []).filter(a => a.status_code >= 400) : (this.prmData.audit || []); },
     async loadPrm() {
-      if (this.scope !== 'bot404' && this.scope !== 'full') return;
+      if (this.scope !== 'bot404' && this.scope !== 'full' && this.scope !== 'prm') return;
       try {
         const [ints, aud, evs, wrs, ses] = await Promise.all([
           fetch('/admin/api/prm/integrations', { headers: this.h() }).then(r => r.json()),

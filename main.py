@@ -288,7 +288,7 @@ def _check_bot404_admin(x_admin_token: str = Header(default="")):
     claims = _decode_jwt(x_admin_token)
     if claims:
         role = claims.get("role", "viewer")
-        if role in ("admin", "root"):
+        if role in ("admin", "root", "prm_admin"):
             return
         raise HTTPException(status_code=403, detail="Admin role required")
     if (settings.admin_token and _secrets_mod.compare_digest(x_admin_token, settings.admin_token)) \
@@ -713,7 +713,7 @@ async def admin_login(body: _LoginBody, request: Request):
         if row and row["pwd_hash"] and row["enabled"] and (row["tenant_id"] is None or row["tenant_enabled"]):
             if _bcrypt.checkpw(body.password.encode("utf-8")[:72], row["pwd_hash"].encode("utf-8")):
                 await pool.execute("UPDATE tenant_users SET last_login_at=now() WHERE id=$1", row["id"])
-                scope = "full" if row["role"] == "root" else "bot404"
+                scope = "full" if row["role"] == "root" else ("prm" if row["role"] == "prm_admin" else "bot404")
                 # JWT с tenant_id, role — каждый запрос мы узнаём этого пользователя
                 token = issue_jwt(
                     user_id=row["id"], tenant_id=row["tenant_id"],
