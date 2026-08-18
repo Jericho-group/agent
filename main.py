@@ -145,6 +145,11 @@ _ADMIN_ALLOWED_ORIGINS.update([
     "http://localhost",
     "http://localhost:3000",
     "http://localhost:8000",
+    "http://localhost:8765",
+    "http://localhost:8080",
+    "http://127.0.0.1:8765",
+    "http://127.0.0.1:8080",
+    "https://admin.dirizher404.ru",
 ])
 
 
@@ -153,7 +158,8 @@ async def _admin_cors_guard(request: Request, call_next):
     """Для /admin/api/* — реальный CORS-фильтр по Origin. Если запрос пришёл с браузерного
     Origin, который не в whitelist, отвечаем 403. Server-to-server (без Origin) — пропускаем."""
     path = request.url.path or ""
-    if path.startswith("/admin/api/") or path.startswith("/admin/ingest"):
+    # /admin/api/embed/* — защищён session-token bearer, разрешаем с любого Origin
+    if (path.startswith("/admin/api/") or path.startswith("/admin/ingest")) and not path.startswith("/admin/api/embed/"):
         origin = request.headers.get("origin")
         if origin and origin not in _ADMIN_ALLOWED_ORIGINS:
             from fastapi.responses import JSONResponse
@@ -2199,6 +2205,14 @@ async def prm_create_tenant(body: _PrmTenantBody, request: Request):
     else:
         # plan_id — берём trial по умолчанию (id=1), integration может позже поменять
         default_plan = await pool.fetchval("SELECT id FROM plans WHERE code='trial' LIMIT 1") or 1
+        # slug conflict resolution: если такой slug уже есть — добавляем -N суффикс
+        base_slug = slug
+        for i in range(50):
+            slug_try = base_slug if i == 0 else f"{base_slug[:57]}-{i}"
+            existing = await pool.fetchval("SELECT id FROM tenants WHERE slug=$1", slug_try)
+            if not existing:
+                slug = slug_try
+                break
         tid = await pool.fetchval(
             "INSERT INTO tenants (slug, name, contact_email, enabled, plan_id, parent_integration_id, external_id, status) "
             "VALUES ($1, $2, $3, true, $4, $5, $6, 'active') RETURNING id",
@@ -2911,13 +2925,16 @@ async def _get_embed_session(request: Request) -> dict | None:
         return None  # idle-timeout истёк
     if row["tenant_status"] != "active":
         return None
-    # проверяем что актор ещё активен
-    table = "tenant_operators" if row["actor_type"] == "operator" else "tenant_contacts"
-    active = await pool.fetchval(
-        f"SELECT active FROM {table} WHERE id=$1", row["actor_id"]
-    )
-    if not active:
-        return None
+    # проверяем что актор ещё активен (super_admin — без active-check, actor_id = integration_id)
+    if row["actor_type"] == "super_admin":
+        pass  # super_admin валиден пока сессия не истекла/не отозвана
+    else:
+        table = "tenant_operators" if row["actor_type"] == "operator" else "tenant_contacts"
+        active = await pool.fetchval(
+            f"SELECT active FROM {table} WHERE id=$1", row["actor_id"]
+        )
+        if not active:
+            return None
     # CSRF-защита (только для cookie-режима: bearer не автоматически отправляется браузером).
     # ТЗ v1.1 § 4 безопасность.
     if cookie_session:
