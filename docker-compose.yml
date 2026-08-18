@@ -1,21 +1,4 @@
 services:
-  postgres:
-    image: pgvector/pgvector:pg16
-    container_name: chatbot_postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: chatbot_db
-      POSTGRES_USER: chatbot_user
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chatbotpw}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./supabase/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U chatbot_user -d chatbot_db"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   chatbot:
     build:
       context: .
@@ -29,7 +12,9 @@ services:
       - ./data:/app/data
       - ./admin:/app/admin
     networks:
-      - chatbot_prod
+      chatbot_prod:
+        aliases:
+          - chatbot
 
   caddy:
     image: caddy:2-alpine

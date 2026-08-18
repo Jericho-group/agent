@@ -3135,6 +3135,366 @@ async def embed_settings_get(request: Request):
     return {"branding": dict(row) if row else None}
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Task 10a: полный ЛК в iframe — управление ботом через embed-endpoints
+# RBAC: read — все акторы, write — operator + super_admin (contact → 403)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _embed_can_write(sess: dict) -> bool:
+    """Может ли актор писать (изменять). Contact — нет."""
+    return sess["actor_type"] in ("operator", "super_admin")
+
+
+# ── Промпт бота ─────────────────────────────────────────────────────────────
+@app.get("/admin/api/embed/prompt", tags=["prm-v1.1"])
+async def embed_prompt_get(request: Request):
+    """Читать system_prompt тенанта. Read — доступно всем акторам с валидной сессией."""
+    sess = await _require_embed(request)
+    pool = await _b404_pool()
+    row = await pool.fetchrow(
+        "SELECT system_prompt FROM tenant_integrations WHERE tenant_id=$1",
+        sess["tenant_id"]
+    )
+    return {
+        "tenant_id": sess["tenant_id"],
+        "system_prompt": (row["system_prompt"] if row else "") or "",
+        "editable": _embed_can_write(sess),
+    }
+
+
+class _EmbedPromptBody(_BaseModel):
+    system_prompt: str
+
+
+@app.patch("/admin/api/embed/prompt", tags=["prm-v1.1"])
+async def embed_prompt_patch(body: _EmbedPromptBody, request: Request):
+    """Обновить system_prompt тенанта. Только operator/super_admin."""
+    sess = await _require_embed(request)
+    if not _embed_can_write(sess):
+        raise HTTPException(status_code=403, detail="prompt edit not allowed for this actor_type")
+    p = (body.system_prompt or "").strip()
+    if len(p) < 20:
+        raise HTTPException(status_code=400, detail="system_prompt too short (min 20 chars)")
+    if len(p) > 100000:
+        raise HTTPException(status_code=400, detail="system_prompt too long (max 100000 chars)")
+    pool = await _b404_pool()
+    # upsert в tenant_integrations
+    exists = await pool.fetchval(
+        "SELECT 1 FROM tenant_integrations WHERE tenant_id=$1", sess["tenant_id"]
+    )
+    if exists:
+        await pool.execute(
+            "UPDATE tenant_integrations SET system_prompt=$1 WHERE tenant_id=$2",
+            p, sess["tenant_id"]
+        )
+    else:
+        await pool.execute(
+            "INSERT INTO tenant_integrations (tenant_id, system_prompt) VALUES ($1, $2)",
+            sess["tenant_id"], p
+        )
+    return {"ok": True, "length": len(p)}
+
+
+# ── Knowledge Base (SQL напрямую — VectorStore.list_docs не поддерживает tenant filter) ──
+@app.get("/admin/api/embed/knowledge", tags=["prm-v1.1"])
+async def embed_knowledge_list(request: Request, category: str | None = None, search: str | None = None, limit: int = 200):
+    """Список документов KB тенанта. Фильтры category/search."""
+    sess = await _require_embed(request)
+    pool = await _b404_pool()
+    conds = ["tenant_id = $1"]
+    params = [sess["tenant_id"]]
+    i = 2
+    if category:
+        conds.append(f"category = ${i}"); params.append(category); i += 1
+    if search:
+        conds.append(f"(title ILIKE ${i} OR content ILIKE ${i})")
+        params.append(f"%{search}%"); i += 1
+    params.append(min(500, max(1, limit)))
+    rows = await pool.fetch(
+        f"SELECT id, title, category, LEFT(content, 400) AS preview, "
+        f"       LENGTH(content) AS length, "
+        f"       to_char(updated_at, 'YYYY-MM-DD HH24:MI') AS updated_at "
+        f"FROM knowledge_base "
+        f"WHERE {' AND '.join(conds)} "
+        f"ORDER BY category NULLS LAST, title NULLS LAST "
+        f"LIMIT ${i}",
+        *params
+    )
+    return {
+        "documents": [dict(r) for r in rows],
+        "count": len(rows),
+        "editable": _embed_can_write(sess),
+    }
+
+
+class _EmbedKnowledgeItem(_BaseModel):
+    id: str | None = None
+    title: str | None = None
+    category: str | None = None
+    content: str
+    source: str | None = None
+
+
+class _EmbedKnowledgeBulk(_BaseModel):
+    items: list[_EmbedKnowledgeItem]
+
+
+@app.post("/admin/api/embed/knowledge", tags=["prm-v1.1"])
+async def embed_knowledge_upsert(body: _EmbedKnowledgeBulk, request: Request):
+    """Добавить/обновить документы в KB одним батчем.
+    Формат: {items: [{id?, title?, category?, content, source?}, ...]}
+    ID автоматически префиксуется tenant_id (защита от коллизий между тенантами).
+    Только operator/super_admin."""
+    sess = await _require_embed(request)
+    if not _embed_can_write(sess):
+        raise HTTPException(status_code=403, detail="knowledge write not allowed")
+    if not body.items or len(body.items) > 100:
+        raise HTTPException(status_code=400, detail="items: 1..100 required")
+    tid = sess["tenant_id"]
+    # OpenAI embeddings
+    import os as _os
+    from openai import OpenAI as _OpenAI
+    client = _OpenAI(api_key=_os.environ.get("OPENAI_API_KEY"), base_url=_os.environ.get("OPENAI_BASE_URL") or None)
+    from knowledge.vector_store import _get_conn as _kb_conn
+    conn = _kb_conn(); conn.autocommit = True
+    inserted = 0
+    for idx, item in enumerate(body.items):
+        text = (item.content or "").strip()
+        if not text:
+            continue
+        if len(text) > 50000:
+            raise HTTPException(status_code=400, detail=f"item[{idx}].content too long (max 50000)")
+        raw_id = item.id or f"embed-{tid}-{_secrets_prm.token_hex(4)}"
+        doc_id = raw_id if raw_id.startswith(f"{tid}::") else f"{tid}::{raw_id}"
+        try:
+            emb_resp = client.embeddings.create(
+                model=_os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small"),
+                input=text
+            )
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"embedding failed: {e}")
+        emb = "[" + ",".join(str(x) for x in emb_resp.data[0].embedding) + "]"
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO knowledge_base (id, content, embedding, category, title, source, tenant_id)
+                   VALUES (%s, %s, %s::vector, %s, %s, %s, %s)
+                   ON CONFLICT (id) DO UPDATE SET
+                     content=EXCLUDED.content, embedding=EXCLUDED.embedding,
+                     category=EXCLUDED.category, title=EXCLUDED.title, source=EXCLUDED.source,
+                     tenant_id=EXCLUDED.tenant_id, updated_at=now()
+                   WHERE knowledge_base.tenant_id = EXCLUDED.tenant_id""",
+                (doc_id, text, emb, item.category, item.title, item.source, tid),
+            )
+        inserted += 1
+    return {"ok": True, "inserted": inserted}
+
+
+@app.delete("/admin/api/embed/knowledge/{doc_id:path}", tags=["prm-v1.1"])
+async def embed_knowledge_delete(doc_id: str, request: Request):
+    """Удалить документ из KB. Только operator/super_admin.
+    Doc_id — полный (`tenant::rawid`) или короткий (`rawid`) — авто-нормализация."""
+    sess = await _require_embed(request)
+    if not _embed_can_write(sess):
+        raise HTTPException(status_code=403, detail="knowledge delete not allowed")
+    tid = sess["tenant_id"]
+    norm_id = doc_id if doc_id.startswith(f"{tid}::") else f"{tid}::{doc_id}"
+    pool = await _b404_pool()
+    n = await pool.execute(
+        "DELETE FROM knowledge_base WHERE id=$1 AND tenant_id=$2",
+        norm_id, tid
+    )
+    # asyncpg возвращает 'DELETE 1' или 'DELETE 0'
+    deleted = 0
+    try: deleted = int(n.split()[-1]) if n else 0
+    except: pass
+    if deleted == 0:
+        raise HTTPException(status_code=404, detail="document not found in your tenant")
+    return {"ok": True, "deleted": doc_id}
+
+
+# ── Настройки виджета (PATCH) ──────────────────────────────────────────────
+class _EmbedBrandingBody(_BaseModel):
+    brand_name: str | None = None
+    bot_name: str | None = None
+    role_subtitle: str | None = None
+    logo_url: str | None = None
+    primary_color: str | None = None
+    accent_color: str | None = None
+    text_color: str | None = None
+    greeting: str | None = None
+    nudge_text: str | None = None
+    chat_title: str | None = None
+    footer_text: str | None = None
+    manager_email: str | None = None
+    position: str | None = None
+
+
+@app.patch("/admin/api/embed/settings", tags=["prm-v1.1"])
+async def embed_settings_patch(body: _EmbedBrandingBody, request: Request):
+    """Обновить брендинг виджета. Только operator/super_admin."""
+    sess = await _require_embed(request)
+    if not _embed_can_write(sess):
+        raise HTTPException(status_code=403, detail="settings edit not allowed")
+    pool = await _b404_pool()
+    tid = sess["tenant_id"]
+    await pool.execute(
+        "INSERT INTO tenant_branding(tenant_id) VALUES($1) ON CONFLICT (tenant_id) DO NOTHING", tid
+    )
+    cols = ["brand_name","bot_name","role_subtitle","logo_url","primary_color","accent_color","text_color",
+            "greeting","nudge_text","chat_title","footer_text","manager_email","position"]
+    data = body.model_dump(exclude_none=False)
+    sets, params = [], []
+    i = 1
+    for c in cols:
+        v = data.get(c, None)
+        if v is not None:
+            sets.append(f"{c}=${i}")
+            params.append(v); i += 1
+    if not sets:
+        return {"ok": True, "updated": 0}
+    params.append(tid)
+    await pool.execute(f"UPDATE tenant_branding SET {', '.join(sets)} WHERE tenant_id=${i}", *params)
+    return {"ok": True, "updated": len(sets)}
+
+
+# ── Расписание бота (Avito + виджет) ────────────────────────────────────────
+@app.get("/admin/api/embed/schedule", tags=["prm-v1.1"])
+async def embed_schedule_get(request: Request):
+    """Получить avito_schedule тенанта + вычисленный статус (активен/неактивен сейчас)."""
+    sess = await _require_embed(request)
+    pool = await _b404_pool()
+    row = await pool.fetchrow(
+        "SELECT avito_schedule FROM tenant_integrations WHERE tenant_id=$1",
+        sess["tenant_id"]
+    )
+    sched = row["avito_schedule"] if row else None
+    if isinstance(sched, str):
+        import json as _j
+        try: sched = _j.loads(sched)
+        except: sched = None
+    return {
+        "schedule": sched,
+        "current": _sched_evaluate_now(sched),
+        "editable": _embed_can_write(sess),
+    }
+
+
+class _EmbedScheduleBody(_BaseModel):
+    schedule: dict | None = None  # None = отключить расписание (always active)
+
+
+@app.patch("/admin/api/embed/schedule", tags=["prm-v1.1"])
+async def embed_schedule_patch(body: _EmbedScheduleBody, request: Request):
+    """Обновить расписание. Только operator/super_admin."""
+    sess = await _require_embed(request)
+    if not _embed_can_write(sess):
+        raise HTTPException(status_code=403, detail="schedule edit not allowed")
+    ok, err = _sched_validate(body.schedule)
+    if not ok:
+        raise HTTPException(status_code=400, detail=err)
+    pool = await _b404_pool()
+    exists = await pool.fetchval(
+        "SELECT 1 FROM tenant_integrations WHERE tenant_id=$1", sess["tenant_id"]
+    )
+    import json as _j
+    sched_json = _j.dumps(body.schedule) if body.schedule else None
+    if exists:
+        await pool.execute(
+            "UPDATE tenant_integrations SET avito_schedule=$1::jsonb WHERE tenant_id=$2",
+            sched_json, sess["tenant_id"]
+        )
+    else:
+        await pool.execute(
+            "INSERT INTO tenant_integrations (tenant_id, avito_schedule) VALUES ($1, $2::jsonb)",
+            sess["tenant_id"], sched_json
+        )
+    return {"ok": True, "schedule_set": body.schedule is not None}
+
+
+# ── Human Takeover: перехват / ответ / возврат боту ─────────────────────────
+@app.post("/admin/api/embed/sessions/{session_id}/takeover", tags=["prm-v1.1"])
+async def embed_session_takeover(session_id: str, request: Request):
+    """Перехватить диалог живым оператором (бот перестаёт отвечать в этой сессии).
+    Только operator/super_admin."""
+    sess = await _require_embed(request)
+    if not _embed_can_write(sess):
+        raise HTTPException(status_code=403, detail="takeover not allowed for this actor_type")
+    pool = await _b404_pool()
+    # проверяем что сессия принадлежит нашему тенанту
+    exists = await pool.fetchval(
+        "SELECT 1 FROM bot_404_log WHERE session_id=$1 AND tenant_id=$2 LIMIT 1",
+        session_id, sess["tenant_id"]
+    )
+    if not exists:
+        raise HTTPException(status_code=404, detail="session not found in your tenant")
+    # маркер takeover в отдельной таблице (создаём if not exists)
+    await pool.execute(
+        "CREATE TABLE IF NOT EXISTS bot_404_takeover ("
+        "  session_id text PRIMARY KEY,"
+        "  tenant_id int NOT NULL,"
+        "  operator_actor_id int,"
+        "  operator_actor_type text,"
+        "  taken_at timestamptz DEFAULT now(),"
+        "  released_at timestamptz"
+        ")"
+    )
+    await pool.execute(
+        "INSERT INTO bot_404_takeover (session_id, tenant_id, operator_actor_id, operator_actor_type) "
+        "VALUES ($1, $2, $3, $4) "
+        "ON CONFLICT (session_id) DO UPDATE SET released_at=NULL, taken_at=now(), "
+        "operator_actor_id=EXCLUDED.operator_actor_id, operator_actor_type=EXCLUDED.operator_actor_type",
+        session_id, sess["tenant_id"], sess["actor_id"], sess["actor_type"]
+    )
+    return {"ok": True, "session_id": session_id, "taken_by_actor_id": sess["actor_id"]}
+
+
+class _EmbedTakeoverReply(_BaseModel):
+    text: str
+
+
+@app.post("/admin/api/embed/sessions/{session_id}/reply", tags=["prm-v1.1"])
+async def embed_session_reply(session_id: str, body: _EmbedTakeoverReply, request: Request):
+    """Оператор пишет в чат от имени бота. Только после takeover."""
+    sess = await _require_embed(request)
+    if not _embed_can_write(sess):
+        raise HTTPException(status_code=403, detail="reply not allowed")
+    txt = (body.text or "").strip()
+    if not txt:
+        raise HTTPException(status_code=400, detail="text required")
+    if len(txt) > 4000:
+        raise HTTPException(status_code=400, detail="text too long (max 4000)")
+    pool = await _b404_pool()
+    # проверим что диалог перехвачен нами
+    t = await pool.fetchrow(
+        "SELECT operator_actor_id, released_at FROM bot_404_takeover "
+        "WHERE session_id=$1 AND tenant_id=$2",
+        session_id, sess["tenant_id"]
+    )
+    if not t or t["released_at"] is not None:
+        raise HTTPException(status_code=400, detail="session not under takeover — call /takeover first")
+    # пишем ответ в bot_404_log как direction=out
+    await pool.execute(
+        "INSERT INTO bot_404_log (session_id, direction, text, tenant_id) VALUES ($1, 'out', $2, $3)",
+        session_id, txt, sess["tenant_id"]
+    )
+    return {"ok": True}
+
+
+@app.post("/admin/api/embed/sessions/{session_id}/release", tags=["prm-v1.1"])
+async def embed_session_release(session_id: str, request: Request):
+    """Вернуть диалог боту. Только operator/super_admin."""
+    sess = await _require_embed(request)
+    if not _embed_can_write(sess):
+        raise HTTPException(status_code=403, detail="release not allowed")
+    pool = await _b404_pool()
+    await pool.execute(
+        "UPDATE bot_404_takeover SET released_at=now() "
+        "WHERE session_id=$1 AND tenant_id=$2 AND released_at IS NULL",
+        session_id, sess["tenant_id"]
+    )
+    return {"ok": True, "session_id": session_id}
+
+
 @app.get("/admin/api/branding", dependencies=[Depends(_check_bot404)])
 async def get_branding(x_admin_token: str = Header(default="")):
     pool = await _b404_pool()
