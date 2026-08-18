@@ -55,41 +55,61 @@ async def lifespan(app: FastAPI):
 
     # PRM v1.1: retention worker — раз в час чистит устаревшие события/сессии/soft-deleted
     async def _prm_retention_loop():
+        import json as _j_wr
         while True:
+            pool = await _b404_pool()
+            rid = None
             try:
-                pool = await _b404_pool()
-                # 30 дней hot-storage для events
+                rid = await pool.fetchval("INSERT INTO worker_runs (worker) VALUES ('retention') RETURNING id")
                 d1 = await pool.execute("DELETE FROM integration_events WHERE created_at < now() - interval '30 days'")
-                # embed-сессии старше 7 дней после expire
                 d2 = await pool.execute("DELETE FROM embed_sessions WHERE expires_at < now() - interval '7 days'")
-                # завершённые async-джобы старше 7 дней
                 d3 = await pool.execute("DELETE FROM async_jobs WHERE updated_at < now() - interval '7 days' AND status IN ('done','failed')")
-                # физическое удаление тенантов, у которых прошёл retention
                 d4 = await pool.execute("DELETE FROM tenants WHERE status='pending_deletion' AND delete_scheduled_at IS NOT NULL AND delete_scheduled_at < now()")
+                result = {"events": d1, "sessions": d2, "jobs": d3, "tenants": d4}
+                await pool.execute("UPDATE worker_runs SET finished_at=now(), ok=true, result=$1::jsonb WHERE id=$2", _j_wr.dumps(result), rid)
                 if any(int(x.split()[-1]) for x in (d1, d2, d3, d4) if x and x.split()[-1].isdigit()):
                     print(f"[prm-retention] events={d1} sessions={d2} jobs={d3} tenants={d4}")
             except Exception as e:
                 print(f"[prm-retention] err: {e}")
+                if rid:
+                    try: await pool.execute("UPDATE worker_runs SET finished_at=now(), ok=false, error=$1 WHERE id=$2", str(e)[:500], rid)
+                    except: pass
             await _asyncio.sleep(3600)  # раз в час
     _asyncio.create_task(_prm_retention_loop())
     print("[startup] PRM retention worker scheduled (background, hourly)")
     # Task 5: PRM email worker для offline-акторов — раз в 5 мин
     async def _prm_email_loop():
+        import json as _j_wr
         while True:
+            pool = await _b404_pool()
+            rid = None
             try:
-                await _prm_send_pending_emails()
+                rid = await pool.fetchval("INSERT INTO worker_runs (worker) VALUES ('email') RETURNING id")
+                result = await _prm_send_pending_emails()
+                await pool.execute("UPDATE worker_runs SET finished_at=now(), ok=true, result=$1::jsonb WHERE id=$2", _j_wr.dumps(result), rid)
             except Exception as e:
                 print(f"[prm-email] err: {e}")
+                if rid:
+                    try: await pool.execute("UPDATE worker_runs SET finished_at=now(), ok=false, error=$1 WHERE id=$2", str(e)[:500], rid)
+                    except: pass
             await _asyncio.sleep(300)
     _asyncio.create_task(_prm_email_loop())
     print("[startup] PRM email worker scheduled (background, every 5 min)")
     # Task 9: PRM webhook worker — раз в 30 сек, доставка events на webhook_url integrations
     async def _prm_webhook_loop():
+        import json as _j_wr
         while True:
+            pool = await _b404_pool()
+            rid = None
             try:
-                await _prm_deliver_pending_webhooks()
+                rid = await pool.fetchval("INSERT INTO worker_runs (worker) VALUES ('webhook') RETURNING id")
+                result = await _prm_deliver_pending_webhooks()
+                await pool.execute("UPDATE worker_runs SET finished_at=now(), ok=true, result=$1::jsonb WHERE id=$2", _j_wr.dumps(result), rid)
             except Exception as e:
                 print(f"[prm-webhook] err: {e}")
+                if rid:
+                    try: await pool.execute("UPDATE worker_runs SET finished_at=now(), ok=false, error=$1 WHERE id=$2", str(e)[:500], rid)
+                    except: pass
             await _asyncio.sleep(30)
     _asyncio.create_task(_prm_webhook_loop())
     print("[startup] PRM webhook worker scheduled (background, every 30s)")
@@ -494,6 +514,121 @@ async def health(deep: bool = False):
 # ── Admin Panel ──────────────────────────────────────────────────────────────
 # (_check_admin / _check_internal / _INTERNAL_SECRET определены выше, до маршрутов)
 
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Task 15: PRM Integrations Dashboard — endpoints для твоей админки
+# Все требуют _check_bot404_admin (scope='bot404', твой super-scope)
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/admin/api/prm/integrations", dependencies=[Depends(_check_bot404_admin)])
+async def admin_prm_integrations():
+    """Список всех PRM integrations + счётчики."""
+    pool = await _b404_pool()
+    rows = await pool.fetch("""
+        SELECT i.id, i.name, i.external_id, i.status, i.webhook_url IS NOT NULL AS has_webhook,
+               i.email_enabled, i.created_at,
+               (SELECT COUNT(*) FROM tenants WHERE parent_integration_id=i.id) AS tenants_count,
+               (SELECT COUNT(*) FROM integration_events WHERE integration_id=i.id) AS events_count,
+               (SELECT MAX(ts) FROM integration_audit WHERE integration_id=i.id) AS last_activity
+        FROM integrations i ORDER BY i.id
+    """)
+    return {"integrations": [dict(r) for r in rows]}
+
+
+@app.get("/admin/api/prm/integrations/{integration_id}/tenants", dependencies=[Depends(_check_bot404_admin)])
+async def admin_prm_tenants(integration_id: int):
+    """Список тенантов integration + счётчики."""
+    pool = await _b404_pool()
+    rows = await pool.fetch("""
+        SELECT t.id, t.slug, t.name, t.external_id, t.status, t.created_at,
+               (SELECT COUNT(*) FROM bot_404_leads WHERE tenant_id=t.id) AS leads_count,
+               (SELECT COUNT(*) FROM tenant_operators WHERE tenant_id=t.id AND active=true) AS ops_count,
+               (SELECT COUNT(*) FROM tenant_contacts WHERE tenant_id=t.id AND active=true) AS contacts_count,
+               (SELECT COUNT(*) FROM embed_sessions WHERE tenant_id=t.id AND revoked_at IS NULL AND expires_at > now()) AS active_sessions
+        FROM tenants t WHERE parent_integration_id=$1 ORDER BY t.id
+    """, integration_id)
+    return {"tenants": [dict(r) for r in rows]}
+
+
+@app.get("/admin/api/prm/audit", dependencies=[Depends(_check_bot404_admin)])
+async def admin_prm_audit(integration_id: int | None = None, hours: int = 24, only_errors: bool = False, limit: int = 200):
+    """Аудит PRM API запросов."""
+    pool = await _b404_pool()
+    conds = [f"ts > now() - interval '{max(1, min(720, hours))} hours'"]
+    params = []
+    i = 1
+    if integration_id:
+        conds.append(f"integration_id = ${i}"); params.append(integration_id); i += 1
+    if only_errors:
+        conds.append("status_code >= 400")
+    params.append(min(500, max(1, limit)))
+    rows = await pool.fetch(
+        f"SELECT id, integration_id, ts, actor_ip::text as actor_ip, method, path, status_code, payload_masked "
+        f"FROM integration_audit WHERE {' AND '.join(conds)} ORDER BY ts DESC LIMIT ${i}",
+        *params
+    )
+    return {"audit": [dict(r) for r in rows], "count": len(rows)}
+
+
+@app.get("/admin/api/prm/events", dependencies=[Depends(_check_bot404_admin)])
+async def admin_prm_events(integration_id: int | None = None, hours: int = 24, limit: int = 200):
+    """Список integration_events."""
+    pool = await _b404_pool()
+    conds = [f"created_at > now() - interval '{max(1, min(720, hours))} hours'"]
+    params = []
+    i = 1
+    if integration_id:
+        conds.append(f"integration_id = ${i}"); params.append(integration_id); i += 1
+    params.append(min(500, max(1, limit)))
+    rows = await pool.fetch(
+        f"SELECT id, integration_id, tenant_id, actor_id, actor_type, event_type, payload, "
+        f"       webhook_delivered_at, webhook_attempts, email_sent_at, created_at "
+        f"FROM integration_events WHERE {' AND '.join(conds)} ORDER BY id DESC LIMIT ${i}",
+        *params
+    )
+    return {"events": [dict(r) for r in rows], "count": len(rows)}
+
+
+@app.get("/admin/api/prm/worker-runs", dependencies=[Depends(_check_bot404_admin)])
+async def admin_prm_worker_runs(worker: str | None = None, hours: int = 24, limit: int = 200):
+    """История запусков workers (retention/email/webhook)."""
+    pool = await _b404_pool()
+    conds = [f"started_at > now() - interval '{max(1, min(720, hours))} hours'"]
+    params = []
+    i = 1
+    if worker:
+        conds.append(f"worker = ${i}"); params.append(worker); i += 1
+    params.append(min(500, max(1, limit)))
+    rows = await pool.fetch(
+        f"SELECT id, worker, ok, result, error, started_at, finished_at, "
+        f"       EXTRACT(EPOCH FROM (finished_at - started_at))*1000 as duration_ms "
+        f"FROM worker_runs WHERE {' AND '.join(conds)} ORDER BY id DESC LIMIT ${i}",
+        *params
+    )
+    return {"runs": [dict(r) for r in rows], "count": len(rows)}
+
+
+@app.get("/admin/api/prm/sessions", dependencies=[Depends(_check_bot404_admin)])
+async def admin_prm_sessions(integration_id: int | None = None, active_only: bool = True, limit: int = 100):
+    """Активные embed-сессии PRM (можешь revoke через отдельный endpoint)."""
+    pool = await _b404_pool()
+    conds = ["1=1"]
+    params = []
+    i = 1
+    if integration_id:
+        conds.append(f"t.parent_integration_id = ${i}"); params.append(integration_id); i += 1
+    if active_only:
+        conds.append("es.revoked_at IS NULL AND es.expires_at > now()")
+    params.append(min(500, max(1, limit)))
+    rows = await pool.fetch(
+        f"SELECT es.code, es.tenant_id, t.slug, es.actor_id, es.actor_type, "
+        f"       es.created_at, es.expires_at, es.last_activity_at, es.revoked_at "
+        f"FROM embed_sessions es LEFT JOIN tenants t ON t.id = es.tenant_id "
+        f"WHERE {' AND '.join(conds)} ORDER BY es.created_at DESC LIMIT ${i}",
+        *params
+    )
+    return {"sessions": [dict(r) for r in rows], "count": len(rows)}
 
 # ── Мульти-аккаунт: логин/пароль -> токен + scope ─────────────────────────────
 from pydantic import BaseModel as _BaseModel
@@ -3150,6 +3285,29 @@ async def embed_settings_get(request: Request):
         "SELECT * FROM v_tenant_branding WHERE tenant_id=$1", sess["tenant_id"]
     )
     return {"branding": dict(row) if row else None}
+
+
+# ── Task 14: super_admin — список всех тенантов integration ────────────────
+@app.get("/admin/api/embed/tenants", tags=["prm-v1.1"])
+async def embed_tenants_list(request: Request):
+    """Список всех тенантов integration (только для super_admin).
+    Operator/contact получают 403."""
+    sess = await _require_embed(request)
+    if sess["actor_type"] != "super_admin":
+        raise HTTPException(status_code=403, detail="tenants list available for super_admin only")
+    pool = await _b404_pool()
+    rows = await pool.fetch(
+        "SELECT t.id, t.slug, t.name, t.external_id, t.status, t.created_at, "
+        "       (SELECT COUNT(*) FROM bot_404_leads WHERE tenant_id=t.id) AS leads_count "
+        "FROM tenants t WHERE t.parent_integration_id = $1 "
+        "ORDER BY t.id",
+        sess["integration_id"]
+    )
+    return {
+        "tenants": [dict(r) for r in rows],
+        "integration_id": sess["integration_id"],
+        "count": len(rows),
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════

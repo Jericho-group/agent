@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>PRM Integrations Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --brand: #0B8A5B; --bg: #F7F8FA; --card: #fff; --text: #1A1A1A; --muted: #6E6E76; --border: #E5E7EB; --err: #DC2626; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); font-size: 14px; }
+  header { padding: 12px 24px; background: var(--card); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 16px; }
+  header .logo { width: 36px; height: 36px; background: var(--brand); color: #fff; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 12px; }
+  header h1 { margin: 0; font-size: 16px; font-weight: 600; }
+  header input { flex: 1; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
+  header button { background: var(--brand); color: #fff; border: 0; padding: 8px 16px; border-radius: 6px; font-weight: 600; cursor: pointer; }
+  .layout { display: grid; grid-template-columns: 220px 1fr; min-height: calc(100vh - 60px); }
+  aside { background: var(--card); border-right: 1px solid var(--border); padding: 16px; }
+  aside button { display: block; width: 100%; background: transparent; color: var(--text); border: 0; padding: 10px 12px; text-align: left; border-radius: 6px; cursor: pointer; font-size: 13px; margin-bottom: 4px; }
+  aside button:hover { background: #F3F4F6; }
+  aside button.active { background: var(--brand); color: #fff; }
+  main { padding: 24px; overflow-x: auto; }
+  h2 { margin: 0 0 16px; font-size: 18px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 24px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  .card .num { font-size: 28px; font-weight: 700; color: var(--brand); }
+  .card .lbl { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }
+  table { width: 100%; background: var(--card); border-collapse: collapse; font-size: 12px; }
+  th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+  th { background: #F9FAFB; font-weight: 600; color: var(--muted); text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px; }
+  tr:hover td { background: #F9FAFB; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+  .b-ok { background: #ECFDF5; color: #065F46; }
+  .b-err { background: #FEE2E2; color: #991B1B; }
+  .b-wait { background: #FEF3C7; color: #92400E; }
+  .b-info { background: #DBEAFE; color: #1E40AF; }
+  code { background: #F3F4F6; padding: 2px 6px; border-radius: 3px; font-family: ui-monospace, monospace; font-size: 11px; }
+  .filter-row { display: flex; gap: 8px; margin-bottom: 12px; align-items: center; }
+  .filter-row input, .filter-row select { padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; }
+  .filter-row label { font-size: 12px; color: var(--muted); }
+  .status { padding: 12px; margin-bottom: 12px; border-radius: 6px; font-size: 12px; }
+  .status.err { background: #FEE2E2; color: #991B1B; }
+  .status.ok { background: #ECFDF5; color: #065F46; }
+  .empty { padding: 40px; text-align: center; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">PRM</div>
+  <h1>PRM Integrations Dashboard</h1>
+  <input id="token" placeholder="X-Admin-Token (твой токен от admin.dirizher404.ru)" type="password">
+  <button onclick="loadAll()">Загрузить</button>
+</header>
+
+<div class="layout">
+  <aside>
+    <button onclick="showTab('overview')" class="active" id="tab-overview">Обзор</button>
+    <button onclick="showTab('tenants')" id="tab-tenants">Тенанты</button>
+    <button onclick="showTab('audit')" id="tab-audit">API-аудит</button>
+    <button onclick="showTab('events')" id="tab-events">События</button>
+    <button onclick="showTab('workers')" id="tab-workers">Workers</button>
+    <button onclick="showTab('sessions')" id="tab-sessions">Сессии</button>
+  </aside>
+  <main id="main">
+    <div class="empty">Введи X-Admin-Token и нажми «Загрузить»</div>
+  </main>
+</div>
+
+<script>
+const BASE = 'https://admin.dirizher404.ru';
+let CURRENT_TAB = 'overview';
+let DATA = { integrations: [], tenants: [], audit: [], events: [], workers: [], sessions: [] };
+
+function tok() { return document.getElementById('token').value.trim(); }
+function h() { return { 'X-Admin-Token': tok(), 'Content-Type': 'application/json' }; }
+
+async function apiGet(path) {
+  const r = await fetch(BASE + path, { headers: h() });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+async function loadAll() {
+  if (!tok()) { alert('Введи токен'); return; }
+  const m = document.getElementById('main');
+  m.innerHTML = '<div class="empty">Загрузка...</div>';
+  try {
+    const [ints, aud, evs, wrs, ses] = await Promise.all([
+      apiGet('/admin/api/prm/integrations'),
+      apiGet('/admin/api/prm/audit?hours=168&limit=200'),
+      apiGet('/admin/api/prm/events?hours=168&limit=200'),
+      apiGet('/admin/api/prm/worker-runs?hours=24&limit=200'),
+      apiGet('/admin/api/prm/sessions?active_only=true&limit=100'),
+    ]);
+    DATA.integrations = ints.integrations;
+    DATA.audit = aud.audit;
+    DATA.events = evs.events;
+    DATA.workers = wrs.runs;
+    DATA.sessions = ses.sessions;
+    // тенанты первой integration
+    if (ints.integrations.length) {
+      const t = await apiGet(`/admin/api/prm/integrations/${ints.integrations[0].id}/tenants`);
+      DATA.tenants = t.tenants;
+    }
+    localStorage.setItem('prm_dashboard_token', tok());
+    renderTab(CURRENT_TAB);
+  } catch (e) {
+    m.innerHTML = `<div class="status err">✗ ${e.message}. Проверь токен.</div>`;
+  }
+}
+
+function showTab(tab) {
+  CURRENT_TAB = tab;
+  document.querySelectorAll('aside button').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + tab)?.classList.add('active');
+  renderTab(tab);
+}
+
+function fmtTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+function fmtStatus(sc) {
+  if (!sc) return '';
+  if (sc >= 500) return `<span class="badge b-err">${sc}</span>`;
+  if (sc >= 400) return `<span class="badge b-wait">${sc}</span>`;
+  if (sc >= 200 && sc < 300) return `<span class="badge b-ok">${sc}</span>`;
+  return `<span class="badge b-info">${sc}</span>`;
+}
+
+function renderTab(tab) {
+  const m = document.getElementById('main');
+  if (tab === 'overview') {
+    const errs = DATA.audit.filter(a => a.status_code >= 500).length;
+    const wrn = DATA.audit.filter(a => a.status_code >= 400 && a.status_code < 500).length;
+    const ok = DATA.audit.filter(a => a.status_code >= 200 && a.status_code < 300).length;
+    m.innerHTML = `
+      <h2>Обзор</h2>
+      <div class="cards">
+        <div class="card"><div class="num">${DATA.integrations.length}</div><div class="lbl">Integrations</div></div>
+        <div class="card"><div class="num">${DATA.tenants.length}</div><div class="lbl">Тенантов PRM (integration=1)</div></div>
+        <div class="card"><div class="num">${DATA.sessions.length}</div><div class="lbl">Активных сессий</div></div>
+        <div class="card"><div class="num">${DATA.events.length}</div><div class="lbl">События за неделю</div></div>
+        <div class="card"><div class="num" style="color:${errs?'#DC2626':'#0B8A5B'}">${errs}</div><div class="lbl">5xx ошибок за неделю</div></div>
+        <div class="card"><div class="num" style="color:#92400E">${wrn}</div><div class="lbl">4xx за неделю</div></div>
+        <div class="card"><div class="num">${ok}</div><div class="lbl">2xx запросов за неделю</div></div>
+        <div class="card"><div class="num">${DATA.workers.length}</div><div class="lbl">Worker-runs за 24ч</div></div>
+      </div>
+      <h2 style="margin-top:24px;">Integrations</h2>
+      <table><thead><tr>
+        <th>id</th><th>name</th><th>external_id</th><th>status</th><th>webhook</th><th>email</th><th>tenants</th><th>events</th><th>last activity</th>
+      </tr></thead><tbody>
+        ${DATA.integrations.map(i => `
+          <tr>
+            <td>${i.id}</td>
+            <td><b>${i.name}</b></td>
+            <td><code>${i.external_id || '—'}</code></td>
+            <td><span class="badge ${i.status==='active'?'b-ok':'b-wait'}">${i.status}</span></td>
+            <td>${i.has_webhook ? '✓' : '—'}</td>
+            <td>${i.email_enabled ? '✓' : '—'}</td>
+            <td>${i.tenants_count}</td>
+            <td>${i.events_count}</td>
+            <td>${fmtTime(i.last_activity)}</td>
+          </tr>
+        `).join('')}
+      </tbody></table>
+    `;
+  }
+  else if (tab === 'tenants') {
+    m.innerHTML = `
+      <h2>Тенанты integration_id=1 (${DATA.tenants.length})</h2>
+      <table><thead><tr>
+        <th>id</th><th>slug</th><th>name</th><th>external_id</th><th>status</th><th>лиды</th><th>ops</th><th>contacts</th><th>активн. сессий</th><th>создан</th>
+      </tr></thead><tbody>
+        ${DATA.tenants.map(t => `
+          <tr>
+            <td>${t.id}</td>
+            <td><code>${t.slug}</code></td>
+            <td>${t.name}</td>
+            <td><code>${t.external_id}</code></td>
+            <td><span class="badge ${t.status==='active'?'b-ok':'b-wait'}">${t.status}</span></td>
+            <td>${t.leads_count}</td>
+            <td>${t.ops_count}</td>
+            <td>${t.contacts_count}</td>
+            <td>${t.active_sessions}</td>
+            <td>${fmtTime(t.created_at)}</td>
+          </tr>
+        `).join('') || '<tr><td colspan="10" class="empty">Тенантов нет</td></tr>'}
+      </tbody></table>
+    `;
+  }
+  else if (tab === 'audit') {
+    m.innerHTML = `
+      <h2>API аудит (последние 200 запросов за неделю)</h2>
+      <div class="filter-row">
+        <label>Только ошибки: <input type="checkbox" id="fltErr" onchange="renderTab('audit')"></label>
+      </div>
+      <table><thead><tr>
+        <th>time</th><th>integration</th><th>ip</th><th>method</th><th>path</th><th>status</th><th>payload</th>
+      </tr></thead><tbody>
+        ${DATA.audit.filter(a => !document.getElementById('fltErr')?.checked || a.status_code >= 400).map(a => `
+          <tr>
+            <td>${fmtTime(a.ts)}</td>
+            <td>${a.integration_id}</td>
+            <td><code>${a.actor_ip || '—'}</code></td>
+            <td><code>${a.method}</code></td>
+            <td><code>${a.path}</code></td>
+            <td>${fmtStatus(a.status_code)}</td>
+            <td style="max-width:400px; overflow:hidden; text-overflow:ellipsis;"><code>${JSON.stringify(a.payload_masked || {}).slice(0, 200)}</code></td>
+          </tr>
+        `).join('') || '<tr><td colspan="7" class="empty">Аудит пуст</td></tr>'}
+      </tbody></table>
+    `;
+  }
+  else if (tab === 'events') {
+    m.innerHTML = `
+      <h2>События (${DATA.events.length} за неделю)</h2>
+      <table><thead><tr>
+        <th>time</th><th>tenant</th><th>actor</th><th>event_type</th><th>webhook</th><th>email</th><th>payload</th>
+      </tr></thead><tbody>
+        ${DATA.events.map(e => `
+          <tr>
+            <td>${fmtTime(e.created_at)}</td>
+            <td>${e.tenant_id}</td>
+            <td>${e.actor_type || '—'}:${e.actor_id || '—'}</td>
+            <td><b>${e.event_type}</b></td>
+            <td>${e.webhook_delivered_at ? '<span class="badge b-ok">✓ '+e.webhook_attempts+'</span>' : (e.webhook_attempts >= 5 ? '<span class="badge b-err">failed</span>' : '<span class="badge b-wait">pending</span>')}</td>
+            <td>${e.email_sent_at ? '<span class="badge b-ok">✓</span>' : '<span class="badge b-wait">pending</span>'}</td>
+            <td style="max-width:400px; overflow:hidden; text-overflow:ellipsis;"><code>${JSON.stringify(e.payload).slice(0, 200)}</code></td>
+          </tr>
+        `).join('') || '<tr><td colspan="7" class="empty">События нет</td></tr>'}
+      </tbody></table>
+    `;
+  }
+  else if (tab === 'workers') {
+    const by = { retention: [], email: [], webhook: [] };
+    DATA.workers.forEach(w => by[w.worker]?.push(w));
+    m.innerHTML = `
+      <h2>Worker runs (24ч)</h2>
+      <div class="cards">
+        ${['retention','email','webhook'].map(w => {
+          const runs = by[w] || [];
+          const last = runs[0];
+          return `<div class="card">
+            <div class="num">${runs.length}</div>
+            <div class="lbl">${w}</div>
+            ${last ? `<div style="margin-top:8px;font-size:11px;color:var(--muted);">Последний: ${fmtTime(last.started_at)}<br>duration: ${Math.round(last.duration_ms || 0)} ms<br>${last.ok ? '✓ OK' : '✗ ERR'}</div>` : ''}
+          </div>`;
+        }).join('')}
+      </div>
+      <h2 style="margin-top:24px;">Все запуски</h2>
+      <table><thead><tr>
+        <th>time</th><th>worker</th><th>ok</th><th>duration</th><th>result</th><th>error</th>
+      </tr></thead><tbody>
+        ${DATA.workers.map(w => `
+          <tr>
+            <td>${fmtTime(w.started_at)}</td>
+            <td><b>${w.worker}</b></td>
+            <td>${w.ok ? '<span class="badge b-ok">✓</span>' : '<span class="badge b-err">✗</span>'}</td>
+            <td>${Math.round(w.duration_ms || 0)} ms</td>
+            <td style="max-width:400px;"><code>${JSON.stringify(w.result || {}).slice(0, 200)}</code></td>
+            <td style="color:var(--err); max-width:300px;">${w.error || ''}</td>
+          </tr>
+        `).join('') || '<tr><td colspan="6" class="empty">Worker runs нет</td></tr>'}
+      </tbody></table>
+    `;
+  }
+  else if (tab === 'sessions') {
+    m.innerHTML = `
+      <h2>Активные embed-сессии (${DATA.sessions.length})</h2>
+      <table><thead><tr>
+        <th>tenant</th><th>actor</th><th>created</th><th>expires</th><th>last activity</th>
+      </tr></thead><tbody>
+        ${DATA.sessions.map(s => `
+          <tr>
+            <td>${s.tenant_id} <code>${s.slug || '—'}</code></td>
+            <td>${s.actor_type}:${s.actor_id}</td>
+            <td>${fmtTime(s.created_at)}</td>
+            <td>${fmtTime(s.expires_at)}</td>
+            <td>${fmtTime(s.last_activity_at) || '—'}</td>
+          </tr>
+        `).join('') || '<tr><td colspan="5" class="empty">Активных сессий нет</td></tr>'}
+      </tbody></table>
+    `;
+  }
+}
+
+// восстановить токен
+const savedT = localStorage.getItem('prm_dashboard_token');
+if (savedT) { document.getElementById('token').value = savedT; }
+</script>
+
+</body>
+</html>
