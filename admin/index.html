@@ -4239,12 +4239,20 @@ function adminApp() {
     prmOnlyErrors: false,
     get prmFiltered() { return this.prmOnlyErrors ? (this.prmData.audit || []).filter(a => a.status_code >= 400) : (this.prmData.audit || []); },
     exitImpersonate() {
-      // Возврат в свой кабинет (Sergey PRM Dashboard)
-      // Восстанавливаем сохранённый scope+token из sessionStorage — они не удалялись
-      try { sessionStorage.removeItem('impInfo'); } catch(_){}
+      // Восстановить сохранённый Sergey/root state из _prmReturn
+      try {
+        const saved = sessionStorage.getItem('_prmReturn');
+        if (saved) {
+          const d = JSON.parse(saved);
+          sessionStorage.setItem('adminToken', d.token);
+          sessionStorage.setItem('adminScope', d.scope);
+          sessionStorage.setItem('adminTenantSlug', d.tenantSlug || '');
+          sessionStorage.removeItem('_prmReturn');
+        }
+        sessionStorage.removeItem('impInfo');
+      } catch(_){}
       this.impersonateInfo = null;
       this.isImpersonating = false;
-      // Перезагрузка — init подхватит сохранённый Sergey token
       window.location.href = '/admin';
     },
 
@@ -4253,8 +4261,22 @@ function adminApp() {
         const r = await fetch('/admin/api/prm/tenants/' + tid + '/impersonate', {method:'POST', headers: this.h()});
         if (!r.ok) { const e = await r.json(); throw new Error(e.detail || 'error'); }
         const d = await r.json();
-        // Редирект в основной ЛК с imp токеном — tryImpersonateFromUrl() подхватит
-        window.location.href = d.url;
+        // Сохраняем PRM-админский state, чтобы вернуться потом
+        sessionStorage.setItem('_prmReturn', JSON.stringify({
+          token: this.token, scope: this.scope, tenantSlug: this.tenantSlug, loginName: this.loginName,
+        }));
+        // Применяем bot404-токен нового тенанта
+        this.token = d.bot404_token;
+        this.scope = 'bot404';
+        this.tenantSlug = slug;
+        this.isImpersonating = true;
+        this.impersonateInfo = { target_slug: slug, root_email: this.loginName || 'prm_admin' };
+        sessionStorage.setItem('adminToken', this.token);
+        sessionStorage.setItem('adminScope', 'bot404');
+        sessionStorage.setItem('adminTenantSlug', slug);
+        sessionStorage.setItem('impInfo', JSON.stringify(this.impersonateInfo));
+        // Перезагрузка чтобы применились все compilation
+        window.location.href = '/admin';
       } catch(e) { alert('Ошибка входа: ' + e.message); }
     },
 

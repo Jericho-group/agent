@@ -739,11 +739,18 @@ async def admin_prm_impersonate(tenant_id: int, request: Request):
     await _prm_audit(1, request, f"/admin/api/prm/tenants/{tenant_id}/impersonate", 200,
                      {"target_slug": t["slug"], "actor_email": email, "actor_role": role})
 
+    # Task 16: выдаём bot404 JWT для этого тенанта (8 часов) — Sergey получит полный ЛК
+    bot404_jwt = issue_jwt(
+        user_id=0, tenant_id=t["id"], role="admin", scope="bot404",
+        email=f"prm_admin:{email}",
+    )
     return {
         "url": f"https://admin.dirizher404.ru/admin?imp={token}&slug={t['slug']}",
         "token": token,
         "ttl_sec": 60,
         "target": t["slug"],
+        "target_tenant_id": t["id"],
+        "bot404_token": bot404_jwt,
     }
 
 
