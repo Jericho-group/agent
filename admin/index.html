@@ -4167,7 +4167,7 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
         </div>
         <div x-show="prmTab==='tenants'" class="bg-white border rounded overflow-x-auto">
           <table class="min-w-full text-xs">
-            <thead style="background:#F9FAFB;"><tr class="text-left uppercase" style="color:#6E6E76;"><th class="px-3 py-2">id</th><th class="px-3 py-2">slug</th><th class="px-3 py-2">name</th><th class="px-3 py-2">external_id</th><th class="px-3 py-2">status</th><th class="px-3 py-2">лиды</th><th class="px-3 py-2">ops</th><th class="px-3 py-2">contacts</th><th class="px-3 py-2">сессий</th></tr></thead>
+            <thead style="background:#F9FAFB;"><tr class="text-left uppercase" style="color:#6E6E76;"><th class="px-3 py-2">ID</th><th class="px-3 py-2">Slug</th><th class="px-3 py-2">Название</th><th class="px-3 py-2">External ID</th><th class="px-3 py-2">Статус</th><th class="px-3 py-2">Лиды</th><th class="px-3 py-2">Операторы</th><th class="px-3 py-2">Контакты</th><th class="px-3 py-2">Сессий</th></tr></thead>
             <tbody>
               <template x-for="t in prmData.tenants" :key="t.id"><tr class="border-t"><td class="px-3 py-2" x-text="t.id"></td><td class="px-3 py-2 font-mono" x-text="t.slug"></td><td class="px-3 py-2" x-text="t.name"></td><td class="px-3 py-2 font-mono" x-text="t.external_id"></td><td class="px-3 py-2" x-text="t.status"></td><td class="px-3 py-2" x-text="t.leads_count"></td><td class="px-3 py-2" x-text="t.ops_count"></td><td class="px-3 py-2" x-text="t.contacts_count"></td><td class="px-3 py-2" x-text="t.active_sessions"></td></tr></template>
             </tbody>
@@ -4176,7 +4176,7 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
         <div x-show="prmTab==='audit'" class="bg-white border rounded overflow-x-auto">
           <div class="p-3 border-b"><label class="text-xs"><input type="checkbox" x-model="prmOnlyErrors"> Только ошибки</label></div>
           <table class="min-w-full text-xs">
-            <thead style="background:#F9FAFB;"><tr class="text-left uppercase" style="color:#6E6E76;"><th class="px-3 py-2">time</th><th class="px-3 py-2">ip</th><th class="px-3 py-2">method</th><th class="px-3 py-2">path</th><th class="px-3 py-2">status</th></tr></thead>
+            <thead style="background:#F9FAFB;"><tr class="text-left uppercase" style="color:#6E6E76;"><th class="px-3 py-2">Время</th><th class="px-3 py-2">IP</th><th class="px-3 py-2">Метод</th><th class="px-3 py-2">Path</th><th class="px-3 py-2">Статус</th></tr></thead>
             <tbody>
               <template x-for="a in prmFiltered" :key="a.id"><tr class="border-t"><td class="px-3 py-2" x-text="fmtT(a.ts)"></td><td class="px-3 py-2 font-mono" x-text="a.actor_ip"></td><td class="px-3 py-2 font-mono" x-text="a.method"></td><td class="px-3 py-2 font-mono" x-text="a.path"></td><td class="px-3 py-2 font-bold" :class="a.status_code>=500 ? 'text-red-600' : a.status_code>=400 ? 'text-amber-600' : 'text-emerald-600'" x-text="a.status_code"></td></tr></template>
             </tbody>
@@ -4184,7 +4184,7 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
         </div>
         <div x-show="prmTab==='events'" class="bg-white border rounded overflow-x-auto">
           <table class="min-w-full text-xs">
-            <thead style="background:#F9FAFB;"><tr class="text-left uppercase" style="color:#6E6E76;"><th class="px-3 py-2">time</th><th class="px-3 py-2">tenant</th><th class="px-3 py-2">actor</th><th class="px-3 py-2">event</th><th class="px-3 py-2">webhook</th><th class="px-3 py-2">email</th></tr></thead>
+            <thead style="background:#F9FAFB;"><tr class="text-left uppercase" style="color:#6E6E76;"><th class="px-3 py-2">Время</th><th class="px-3 py-2">Тенант</th><th class="px-3 py-2">Actor</th><th class="px-3 py-2">Событие</th><th class="px-3 py-2">Webhook</th><th class="px-3 py-2">Email</th></tr></thead>
             <tbody>
               <template x-for="e in prmData.events" :key="e.id"><tr class="border-t"><td class="px-3 py-2" x-text="fmtT(e.created_at)"></td><td class="px-3 py-2" x-text="e.tenant_id"></td><td class="px-3 py-2" x-text="(e.actor_type||'—')+':'+(e.actor_id||'—')"></td><td class="px-3 py-2 font-bold" x-text="e.event_type"></td><td class="px-3 py-2" x-text="e.webhook_delivered_at ? '✓ '+e.webhook_attempts : (e.webhook_attempts>=5 ? '✗ failed' : 'pending')"></td><td class="px-3 py-2" x-text="e.email_sent_at ? '✓' : 'pending'"></td></tr></template>
             </tbody>
@@ -4192,7 +4192,7 @@ body.theme-404 .orchestra-feature .text-white\/55, body.theme-404 .orchestra-fea
         </div>
         <div x-show="prmTab==='workers'" class="bg-white border rounded overflow-x-auto">
           <table class="min-w-full text-xs">
-            <thead style="background:#F9FAFB;"><tr class="text-left uppercase" style="color:#6E6E76;"><th class="px-3 py-2">time</th><th class="px-3 py-2">worker</th><th class="px-3 py-2">ok</th><th class="px-3 py-2">duration</th><th class="px-3 py-2">result</th></tr></thead>
+            <thead style="background:#F9FAFB;"><tr class="text-left uppercase" style="color:#6E6E76;"><th class="px-3 py-2">Время</th><th class="px-3 py-2">Воркер</th><th class="px-3 py-2">OK</th><th class="px-3 py-2">Длительность</th><th class="px-3 py-2">Результат</th></tr></thead>
             <tbody>
               <template x-for="w in prmData.workers" :key="w.id"><tr class="border-t"><td class="px-3 py-2" x-text="fmtT(w.started_at)"></td><td class="px-3 py-2 font-bold" x-text="w.worker"></td><td class="px-3 py-2" :class="w.ok ? 'text-emerald-600' : 'text-red-600'" x-text="w.ok ? '✓' : '✗'"></td><td class="px-3 py-2" x-text="Math.round(w.duration_ms||0)+' ms'"></td><td class="px-3 py-2 font-mono text-[10px]" x-text="JSON.stringify(w.result||{}).slice(0,150)"></td></tr></template>
             </tbody>
@@ -6091,6 +6091,7 @@ function adminApp() {
               if (p === 'conversations') this.loadSessions();
               if (p === 'kb') this.loadKbDocs();
               if (p === 'leads') this.loadLeads();
+              if (p === 'prm') this.loadPrm();
             });
             if (this.authenticated) this.startPolling?.();
             return;
