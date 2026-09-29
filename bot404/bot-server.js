@@ -1032,25 +1032,25 @@ app.post('/api/sales-chat', resolveTenant, async (req, res) => {
     let msg = String((req.body && req.body.message) || '').trim();
     // Медиа-сообщения (голос/картинка) — распознаём и подставляем как text.
     // Используется тестовым чатом в ЛК Дирижёра + виджетом (когда добавим).
-    if (!msg && req.body && req.body.media && req.body.media.data_b64) {
+    if (req.body && req.body.media && req.body.media.data_b64) {
       const media = req.body.media;
       const buf = Buffer.from(String(media.data_b64), 'base64');
       const mime = String(media.mime || '');
-      const kind = String(media.type || '').toLowerCase();
+      const kind = String(media.type || media.kind || '').toLowerCase();
       try {
         if (kind === 'audio' || mime.startsWith('audio/')) {
-          msg = await whisperTranscribeAudio(buf, mime || 'audio/webm');
+          const _mt = await whisperTranscribeAudio(buf, mime || 'audio/webm'); msg = [msg, _mt].filter(Boolean).join(' ');
           console.log('[media-voice] tenant=' + req.tenant.slug + ' sid=' + sid + ' transcribed=' + msg.slice(0, 120));
         } else if (kind === 'image' || mime.startsWith('image/')) {
           const desc = await visionDescribeImage(buf, mime || 'image/jpeg');
-          msg = desc ? '[Клиент прислал изображение — ' + desc + ']' : '';
+          const _mi = desc ? '[Клиент прислал изображение — ' + desc + ']' : ''; msg = [msg, _mi].filter(Boolean).join(' ');
           console.log('[media-image] tenant=' + req.tenant.slug + ' sid=' + sid + ' described=' + desc.slice(0, 150));
         } else {
           console.warn('[media] unknown kind=' + kind + ' mime=' + mime);
         }
       } catch (e) {
         console.warn('[media] recognize fail:', e.message);
-        return res.status(422).json({ error: 'media-recognize-fail', detail: e.message.slice(0, 200) });
+        if (!msg) return res.status(422).json({ error: 'media-recognize-fail', detail: e.message.slice(0, 200) });
       }
     }
     // Phone-ack guard (клиентские тенанты): если бот подтверждает получение номера, а
